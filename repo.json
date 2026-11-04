@@ -1,1 +1,37 @@
-[]
+[
+  {
+    "Author": "koko",
+    "Name": "Market Ledger",
+    "InternalName": "MarketLedger",
+    "Punchline": "Plan what to make for gil on kokos-tools.com; let Artisan and GatherBuddy Reborn make it.",
+    "Description": "The in-game half of Market Ledger on kokos-tools.com. The site plans what's worth making for gil from market prices, your jobs and what you hold; this plugin carries a plan out, step by step, by asking the plugins you already use to do the work: Artisan crafts, GatherBuddy Reborn gathers, Lifestream travels and vnavmesh walks. It takes materials from your retainers at a summoning bell, and buys from vendors and on the market board by itself, never above each line's price and never past the gil you agreed to on the site. It stops for combat, duties, cutscenes and anything it didn't expect.\n\nIt also tells the site your jobs' levels, what you hold (bags, crystals, saddlebags, retainers as you open them), and your retainers' listings and sales, so the site plans around them and keeps your books.\n\nIt drives your character and spends gil: use it where you're happy to. Needs Artisan, GatherBuddy Reborn, vnavmesh and Lifestream; AutoRetainer and Allagan Tools are optional. Open it with /ledger.",
+    "ApplicableVersion": "any",
+    "RepoUrl": "https://github.com/koko-puffs/market-ledger-plugin",
+    "Tags": [
+      "market",
+      "market board",
+      "crafting",
+      "gathering",
+      "gil",
+      "artisan",
+      "gatherbuddy",
+      "retainers",
+      "market ledger"
+    ],
+    "CategoryTags": [
+      "utility"
+    ],
+    "DalamudApiLevel": 15,
+    "LoadPriority": 0,
+    "IconUrl": "https://raw.githubusercontent.com/koko-puffs/market-ledger-plugin/main/MarketLedger/images/icon.png",
+    "AcceptsFeedback": true,
+    "AssemblyVersion": "0.1.0.0",
+    "TestingAssemblyVersion": "0.1.0.0",
+    "DownloadLinkInstall": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.0/MarketLedger.zip",
+    "DownloadLinkUpdate": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.0/MarketLedger.zip",
+    "DownloadLinkTesting": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.0/MarketLedger.zip",
+    "LastUpdate": 1793775989,
+    "IsHide": false,
+    "IsTestingExclusive": false
+  }
+]
