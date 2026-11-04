@@ -85,7 +85,8 @@ Steps on the framework thread, one `Tick` a frame, as Housing Studio's errand ru
   paused, from the progress the site kept (steps through, skipped or failed stay so; gil spent still
   counts against `maxGil`); Resume carries on from your bags. When the site doesn't send the run back
   (its inbox's `active` entries carry `run` and `progress` once the site has them), the site is told it's
-  stopped. Runs another install has in hand are never touched.
+  stopped. Runs another install has in hand are never touched. While it holds a run, the plugin tells the
+  site at least every 45 s whatever the run's status (see `ml_plugin_run_update` below).
 - **Each step**: if your bags already have it, it's done at once. Otherwise:
   - *gather* and *craft* are handed to their plugin (below), and watched.
   - *withdraw*, *vendor*, *market* and *entrust* are lists of parts (getting to a bell, opening a
@@ -233,16 +234,18 @@ the site's own words when its hint is one written for players (`token`, `off`, `
 minutes; `run` on the run in hand's update stops sending its progress and stops the run here (it was
 stopped or deleted on the site); sales or listings refused as `data` or `size` aren't sent again. Calls run off the framework
 thread, one of each kind at a time, waiting longer after each failure (5 s doubling to 5 minutes), and
-paced under the site's hourly limits for a person (hello 240, holdings 240, inbox 720, run_update
-3,600, sales 240, listings 480): at most 180, 30, 600, 1,800, 180 and 450 an hour (and a few more
-run updates besides: taking a run, and the last word on unloading).
+paced under the site's hourly limits for a person (hello 240, holdings 240, inbox 1,800, run_update
+3,600 and 100 more for finishes, sales 240, listings 480): at most 180, 30, 600, 1,800, 180 and 450 an
+hour (and a few more run updates besides: taking a run, and the last word on unloading). The site's
+newer optional arguments (`p_known`, `p_sent_at`, `p_key`) are sent; a site that answers 404 for them
+(an older one) has that function called without them from then on (`Core/RunFile.cs`, `SiteArgs`).
 
 | function | when | what |
 | --- | --- | --- |
 | `ml_plugin_hello` (p_character) | logging in, another character, every 10 minutes | `{ key, name, world, dc, jobs, gil, freeSlots }`; its `account` is shown as linked |
 | `ml_plugin_holdings` (p_key, p_items, p_places) | when what you hold changes, at most every 2 minutes | totals, and each place `{ place, kind, items }`: Bags, Crystals, Saddlebag (as last seen), each retainer (as last seen open, else Allagan Tools' count; 12 at most, the ones seen most lately) |
-| `ml_plugin_inbox` | every 30 s; every 6 s while a run is in hand | the runs sent (read and checked: one that can't be read is logged and left out; one this plugin has had in hand isn't offered again); a pending command it shows for the run in hand makes the next run update go at once; the first after loading, its `active` runs (`ActiveRun`), to pick up the one this install had in hand |
-| `ml_plugin_run_update` (p_run, p_status, p_progress) | taking a run ("accepted", before it starts); each change (at most every 2 s) and every 15 s while running; each run's last word (done, stopped, failed; paused on unloading) | `RunProgress`, the status never `sent` or `draft`; its answer's `command` (handed over once there) is obeyed. Last words are queued by run (`SiteSync.QueueFinal`) and sent before the run in hand's progress, again after a failure, until the site takes each (or refuses it as `run`, `data` or `size`): starting another run never loses the one put aside. On unloading what's queued goes at once, waited for 2 s at most |
+| `ml_plugin_inbox` (p_known) | every 30 s; every 6 s while a run is in hand | `p_known`: the ids of the runs whose files the plugin has (in hand, and waiting), whose `run` and `progress` the site then leaves out (the files kept from before are used). The runs sent (read and checked: one that can't be read is logged and left out; one this plugin has had in hand isn't offered again; each one's `sent_at` kept as the site wrote it); a pending command it shows for the run in hand makes the next run update go at once; the first after loading, its `active` runs (`ActiveRun`: id, name, status, command, run, progress, `taken_key`), to pick up the one this install had in hand (carried on only by the character in `taken_key`) |
+| `ml_plugin_run_update` (p_run, p_status, p_progress, p_sent_at, p_key) | taking a run (it sends "accepted", the claim, before it starts, with `p_sent_at`, the inbox's `sent_at` for the sending it has, so a run sent again since is refused); each change (at most every 2 s); every 15 s while running and at least every 45 s in every other status while a run is held (the site takes a plugin silent for 2 minutes to be gone: its Stop then finishes the run, and another plugin may take it over); each run's last word (done, stopped, failed; paused on unloading) | `p_key` on every call: the character carrying the run out (the site holds a run for one plugin and character; another's word on it is refused with `run`, and the run then stops here). `RunProgress`, the status never `sent` or `draft`; its answer's `command` (handed over once there) is obeyed. Last words are queued by run (`SiteSync.QueueFinal`) and sent before the run in hand's progress, again after a failure, until the site takes each (or refuses it as `run`, `data` or `size`): starting another run never loses the one put aside. On unloading what's queued goes at once, waited for 2 s at most |
 | `ml_plugin_sales` (p_key, p_sales) | a retainer's sale history window read with new sales | `[{ retainer, item, hq, quantity, price, at }]`, at most 500 a call, each sale once (by its key) |
 | `ml_plugin_listings` (p_key, p_retainer, p_items) | a retainer's sell list read and changed | `[{ item, hq, quantity, price }]` |
 
@@ -376,7 +379,8 @@ release, which makes its entry.
 
 - Repricing your listings stays a suggestion on the site.
 - A run picked up again after the plugin reloads needs the site's inbox to send its `run` and
-  `progress` in `active`; until it does, such a run is reported stopped.
+  `progress` in `active` (the hardening migration does); a site that doesn't has such a run reported
+  stopped.
 - What a market line had spent before a reload isn't known line by line: the run's `maxGil` (with
   all it had spent) still holds, each line's own budget starts again.
 - Words are matched in English only (menus, objects' names, the sale history's item names).

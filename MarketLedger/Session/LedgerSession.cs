@@ -199,7 +199,7 @@ public sealed class LedgerSession : IDisposable
         }
         if (run.File is { } file && file.Guid == mine)
         {
-            engine.Adopt(file, run.Progress);
+            engine.Adopt(file, run.Progress, run.TakenKey);
             sync.RunChanged();
             Changed?.Invoke();
             return;
@@ -208,7 +208,7 @@ public sealed class LedgerSession : IDisposable
         var message = "Stopped: the plugin was reloaded and couldn't pick the run up again. Send it again from the site to carry on.";
         JsonObject? progress = null;
         if (run.Progress is { } p) progress = (p with { Status = RunStatus.Stopped, Message = message, UpdatedAt = DateTime.UtcNow }).ToJson();
-        sync.QueueFinal(mine, mine.ToString(), RunStatus.Stopped, progress);
+        sync.QueueFinal(mine, mine.ToString(), RunStatus.Stopped, progress, run.TakenKey);
         SetRunInHand(null);
     }
 
@@ -368,7 +368,7 @@ public sealed class LedgerSession : IDisposable
         // picked up again when the plugin loads.
         Safely(() =>
         {
-            if (engine.Unload() is { } last) sync.QueueFinal(last.File, last.Progress);
+            if (engine.Unload() is { } last) sync.QueueFinal(last.File, last.Progress, engine.RunKey);
             sync.FlushOnUnload(TimeSpan.FromSeconds(2));
         }, "Market Ledger couldn't pause the run while unloading");
         Safely(engine.Dispose, "Market Ledger couldn't let go of the run's helpers");

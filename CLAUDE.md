@@ -24,8 +24,10 @@
   (`RunFile`, `RunStep`, `RunLine`, `RunProgress`, `RunStatus`) there, `MarketLedger/Core/RunFile.cs`
   here, in camelCase JSON. Change both together, and the sample in `MarketLedger.Tests/RunFileTests.cs`.
 - The site's functions for the plugin (`ml_plugin_…`) are in kokos-tools' migration
-  `supabase/migrations/20261104055050_ml_market_ledger.sql`: their arguments, answers, refusal hints
-  and hourly limits are what `Session/SiteSync.cs` is written against.
+  `supabase/migrations/20261104055050_ml_market_ledger.sql`, changed in place by
+  `20261104064340_ml_hardening.sql` (who holds a run, `p_sent_at`, `p_key`, the inbox's `active` runs):
+  their arguments, answers, refusal hints and hourly limits are what `Session/SiteSync.cs` is written
+  against.
 
 ## Building
 

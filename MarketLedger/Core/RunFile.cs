@@ -466,8 +466,53 @@ public sealed record ActiveRun(Guid Id, RunStatus? Status, string? Command, RunF
                 file = null;
             }
         }
-        return new ActiveRun(id, RunWords.Status(JsonRead.Str(a, "status")), JsonRead.Str(a, "command"), file, RunProgress.From(a["progress"]));
+        return new ActiveRun(id, RunWords.Status(JsonRead.Str(a, "status")), JsonRead.Str(a, "command"), file, RunProgress.From(a["progress"]))
+        {
+            Name = JsonRead.Str(a, "name"),
+            TakenKey = JsonRead.Str(a, "taken_key"),
+        };
     }
+
+    /// <summary>The run's name, when the site says it.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>The character (its key) whose plugin holds the run, when the site knows (<c>taken_key</c>).</summary>
+    public string? TakenKey { get; init; }
+}
+
+/// <summary>
+/// The site's newer, optional arguments: an older site (one without them) answers 404 for a call carrying
+/// them, so after that they're left out of that function's calls. Pure, so it's tested.
+/// </summary>
+public sealed class SiteArgs
+{
+    /// <summary>Arguments a newer site takes and an older one doesn't know.</summary>
+    public static readonly string[] Optional = { "p_known", "p_sent_at", "p_key" };
+
+    private readonly HashSet<string> older = new(StringComparer.Ordinal);
+
+    /// <summary>The function's arguments as this site takes them (the optional ones left out when it's an older site's).</summary>
+    public JsonObject For(string function, JsonObject args)
+    {
+        if (!older.Contains(function)) return args;
+        var copy = new JsonObject();
+        foreach (var (k, v) in args)
+            if (Array.IndexOf(Optional, k) < 0) copy[k] = v?.DeepClone();
+        return copy;
+    }
+
+    /// <summary>
+    /// The call's answer: a 404 for a call that carried optional arguments marks the function as an older
+    /// site's (true: try again without them).
+    /// </summary>
+    public bool Learn(string function, JsonObject sent, RpcResult answer)
+    {
+        if (!answer.NotFound || older.Contains(function) || !sent.Any(kv => Array.IndexOf(Optional, kv.Key) >= 0)) return false;
+        older.Add(function);
+        return true;
+    }
+
+    public bool Older(string function) => older.Contains(function);
 }
 
 /// <summary>Small readers for the site's JSON: a missing or wrongly typed value is null, never a throw.</summary>

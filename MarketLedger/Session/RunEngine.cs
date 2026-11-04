@@ -117,6 +117,9 @@ public sealed partial class RunEngine : IDisposable
     /// <summary>The character (content id) the run is being carried out by: another one logged in pauses it.</summary>
     private ulong runBy;
 
+    /// <summary>The key of the character carrying the run out (the site's <c>p_key</c>, its <c>taken_key</c>), or null when not known.</summary>
+    public string? RunKey { get; private set; }
+
     /// <summary>What each market line has spent this run (its budget holds across pauses and resumes).</summary>
     private readonly Dictionary<RunLine, long> lineSpent = new(ReferenceEqualityComparer.Instance);
 
@@ -247,10 +250,12 @@ public sealed partial class RunEngine : IDisposable
     /// paused (your bags say where each step is; Resume carries on). What it had spent still counts against
     /// the gil agreed.
     /// </summary>
-    public void Adopt(RunFile file, RunProgress? progress)
+    public void Adopt(RunFile file, RunProgress? progress, string? takenKey = null)
     {
         if (Active) return;
         Take(file);
+        // The character it was being carried out by, as the site has it: only that one carries it on.
+        if (!string.IsNullOrEmpty(takenKey)) RunKey = takenKey;
         var (s, n, step) = RunPickup.Restore(file, progress);
         states = s;
         notes = n;
@@ -281,6 +286,7 @@ public sealed partial class RunEngine : IDisposable
         log.Clear();
         lastTerritory = InGame.Territory;
         runBy = Services.PlayerState.ContentId;
+        RunKey = CharacterKey();
     }
 
     /// <summary>AutoRetainer held for the run, when that's asked for (on starting, and on resuming a run picked up again).</summary>
@@ -333,6 +339,7 @@ public sealed partial class RunEngine : IDisposable
         if (Status != RunStatus.Paused) return;
         var blocked = !Services.ClientState.IsLoggedIn || Services.Objects.LocalPlayer == null ? "log in first."
             : File != null && OtherCharacter(File) is { } other ? other
+            : RunKey != null && CharacterKey() is { } me && me != RunKey ? "another of your characters was carrying this run out: log in with that one."
             : InGame.Blocked(false);
         if (blocked != null)
         {
@@ -345,6 +352,7 @@ public sealed partial class RunEngine : IDisposable
         pausedAt = null;
         lastTerritory = InGame.Territory;
         runBy = Services.PlayerState.ContentId;
+        RunKey ??= CharacterKey();
         HoldHelpers();
         Say(HelperNames.Ledger, "Resumed.");
         BeginStep(NextFrom(StepIndex));

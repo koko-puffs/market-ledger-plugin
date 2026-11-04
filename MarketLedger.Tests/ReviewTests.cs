@@ -98,7 +98,9 @@ public class PickUpTests
         Assert.Equal(4200L, read.Progress!.Spent);
 
         // Today's inbox: no run nor progress in it.
-        var bare = ActiveRun.From(new JsonObject { ["id"] = run.Id, ["status"] = "running", ["command"] = "pause" })!;
+        var bare = ActiveRun.From(new JsonObject { ["id"] = run.Id, ["status"] = "running", ["command"] = "pause", ["name"] = "Gems", ["taken_key"] = "0123456789abcdef0123456789abcdef" })!;
+        Assert.Equal("Gems", bare.Name);
+        Assert.Equal("0123456789abcdef0123456789abcdef", bare.TakenKey);
         Assert.Null(bare.File);
         Assert.Null(bare.Progress);
         Assert.Equal("pause", bare.Command);
@@ -146,5 +148,33 @@ public class PickUpTests
         Assert.Equal(c, RunPickup.NextLater(new[] { a, c }, new[] { b, c }));
         Assert.Null(RunPickup.NextLater(new[] { a }, new[] { b, c }));
         Assert.Null(RunPickup.NextLater(new[] { a, b }, Array.Empty<Guid>()));
+    }
+}
+
+public class SiteArgsTests
+{
+    [Fact]
+    public void AnOlderSiteGetsItsCallsWithoutTheNewerArguments()
+    {
+        var args = new SiteArgs();
+        var call = new JsonObject { ["p_run"] = "x", ["p_status"] = "accepted", ["p_key"] = "k", ["p_sent_at"] = "t" };
+        Assert.True(ReferenceEquals(call, args.For("ml_plugin_run_update", call)));
+
+        // A 404 with the newer arguments: an older site.
+        var notFound = SiteRpc.Read(System.Net.HttpStatusCode.NotFound, "{\"code\":\"PGRST202\"}");
+        Assert.True(notFound.NotFound);
+        Assert.True(args.Learn("ml_plugin_run_update", call, notFound));
+        Assert.False(args.Learn("ml_plugin_run_update", call, notFound));
+        var plain = args.For("ml_plugin_run_update", call);
+        Assert.Equal(2, plain.Count);
+        Assert.Null(plain["p_key"]);
+        Assert.Equal("accepted", (string?)plain["p_status"]);
+
+        // Another function isn't touched; nor is one whose 404 came without the newer arguments, or another failure.
+        Assert.True(ReferenceEquals(call, args.For("ml_plugin_inbox", call)));
+        Assert.False(args.Learn("ml_plugin_hello", new JsonObject { ["p_character"] = 1 }, notFound));
+        Assert.False(args.Learn("ml_plugin_inbox", new JsonObject { ["p_known"] = new JsonArray() }, SiteRpc.Read(System.Net.HttpStatusCode.InternalServerError, null)));
+        Assert.False(args.Older("ml_plugin_inbox"));
+        Assert.False(SiteRpc.Read(System.Net.HttpStatusCode.OK, "{}").NotFound);
     }
 }

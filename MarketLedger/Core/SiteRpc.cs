@@ -18,7 +18,9 @@ namespace MarketLedger.Core;
 /// <param name="Hint">The site's own hint on a refusal (<c>rate</c>, <c>run</c>…), or null.</param>
 /// <param name="TokenRefused">The site doesn't know the token: link again.</param>
 /// <param name="Unreachable">It never got an answer (no connection, the wait ran out): worth trying again later.</param>
-public sealed record RpcResult(bool Ok, string? Body, string? Why, string? Hint = null, bool TokenRefused = false, bool Unreachable = false)
+/// <param name="NotFound">The site has no such function, or none taking those arguments (an older site: a newer
+/// argument can be left out and the call tried again).</param>
+public sealed record RpcResult(bool Ok, string? Body, string? Why, string? Hint = null, bool TokenRefused = false, bool Unreachable = false, bool NotFound = false)
 {
     public static RpcResult Stopped { get; } = new(false, null, "Stopped.");
 }
@@ -80,7 +82,7 @@ public static class SiteRpc
             >= 500 => $"The site had a problem ({code}). Try again in a minute.",
             _ => $"The site said no ({code}).",
         };
-        return new RpcResult(false, null, why, Worded(hint) ? hint : null, Unreachable: code is 429 or >= 500);
+        return new RpcResult(false, null, why, Worded(hint) ? hint : null, Unreachable: code is 429 or >= 500, NotFound: code == 404);
     }
 
     /// <summary>

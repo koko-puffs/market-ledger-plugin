@@ -73,7 +73,25 @@ public sealed class SiteSync : IDisposable
     private Guid? updatesRefused;
 
     /// <summary>Runs' last words (done, stopped, failed; paused on unloading), oldest first, until the site takes each.</summary>
-    private readonly List<(Guid Id, string RunId, RunStatus Status, JsonObject? Progress)> finals = new();
+    private readonly List<Final> finals = new();
+
+    private readonly record struct Final(Guid Id, string RunId, RunStatus Status, JsonObject? Progress, string? Key);
+
+    /// <summary>The site's newer optional arguments, left out of a function's calls once an older site says it doesn't know them.</summary>
+    private readonly SiteArgs siteArgs = new();
+
+    /// <summary>Each waiting run's <c>sent_at</c> as the site wrote it (said back, to the microsecond, when it's taken).</summary>
+    private readonly Dictionary<Guid, string> sentAtWords = new();
+
+    /// <summary>Waiting runs sent again since their file was kept: asked for whole next time.</summary>
+    private readonly HashSet<Guid> resend = new();
+
+    /// <summary>
+    /// While a run is held, the site hears of it at least this often whatever its status (paused and waiting
+    /// too): after 2 minutes of silence the site takes the plugin to be gone (its Stop finishes the run, and
+    /// another plugin may take it over).
+    /// </summary>
+    private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(45);
 
     /// <summary>Refused as switched off: the link is tried again then.</summary>
     private DateTime? offRetryAt;
@@ -104,7 +122,7 @@ public sealed class SiteSync : IDisposable
         this.allagan = allagan;
         site = new SiteSession(() => config.Token);
         engine.Changed += () => update.Changed();
-        engine.Ended += (file, progress) => QueueFinal(file, progress);
+        engine.Ended += (file, progress) => QueueFinal(file, progress, engine.RunKey);
         Relinked();
     }
 
@@ -175,7 +193,7 @@ public sealed class SiteSync : IDisposable
 
         // A run in hand: the inbox is asked more often (the site's buttons answer sooner).
         inbox.Every = engine.Active ? TimeSpan.FromSeconds(6) : TimeSpan.FromSeconds(30);
-        update.Every = engine.Active && engine.Status == RunStatus.Running ? TimeSpan.FromSeconds(15) : null;
+        update.Every = !engine.Active ? null : engine.Status == RunStatus.Running ? TimeSpan.FromSeconds(15) : Heartbeat;
 
         if (Character is { } c && hello.Due(now)) SendHello(c);
         if (Link is not LinkState.Linked) return;
@@ -183,11 +201,16 @@ public sealed class SiteSync : IDisposable
         if (inbox.Due(now)) AskInbox();
         // Runs' last words first (one replaced by another must still be heard of), then the run in hand's
         // progress ("sent" and "draft" are the site's own words, never said).
-        if (finals.Count > 0)
+        // (The run in hand's heartbeat goes even while a last word waits, so a site slow to take that one never
+        // has the run in hand taken for gone.)
+        var held = engine.File is { } inHand && engine.Active && updatesRefused != inHand.Guid ? inHand : null;
+        var heartbeatDue = held != null && now - runUpdateAt > Heartbeat;
+        if (heartbeatDue) update.Changed();
+        if (finals.Count > 0 && !heartbeatDue)
         {
             if (update.Due(now)) SendFinal(finals[0]);
         }
-        else if (engine.File is { } run && engine.Active && updatesRefused != run.Guid && update.Due(now)) SendUpdate(run);
+        else if (held != null && update.Due(now)) SendUpdate(held);
         if (Character is { } who && salesWaiting.Count > 0 && salesPace.Due(now)) SendSales(who.Key);
         if (Character is { } me && listingsWaiting != null && listingsPace.Due(now)) SendListings(me.Key);
     }
@@ -275,12 +298,15 @@ public sealed class SiteSync : IDisposable
     private void Call(string function, JsonObject args, Pace pace, Action<RpcResult> then)
     {
         var gen = generation;
-        site.Call(function, args).ContinueWith(t =>
+        var sent = siteArgs.For(function, args);
+        site.Call(function, sent).ContinueWith(t =>
         {
             var r = t.Status == TaskStatus.RanToCompletion ? t.Result : new RpcResult(false, null, "The call failed.", Unreachable: true);
             answers.Enqueue(() =>
             {
                 if (gen != generation) return;
+                // An older site, without the newer arguments: they're left out from now on (the call goes again after the backoff).
+                if (siteArgs.Learn(function, sent, r)) Services.Log.Information($"Market Ledger: the site's {function} is an older one; calling it without the newer arguments.");
                 if (r.Hint == "rate") pace.RateLimited(DateTime.UtcNow, RateWait);
                 else pace.Done(r.Ok, DateTime.UtcNow);
                 if (!r.Ok)
@@ -362,7 +388,16 @@ public sealed class SiteSync : IDisposable
 
     private void AskInbox()
     {
-        Call("ml_plugin_inbox", new JsonObject(), inbox, r =>
+        // The runs whose files the plugin has (in hand, and waiting): the site leaves their files out.
+        var known = new JsonArray();
+        var have = new Dictionary<Guid, RunFile>();
+        if (engine.File is { } inHand) have[inHand.Guid] = inHand;
+        foreach (var w in Waiting) have[w.Id] = w.File;
+        // A run whose sending changed since its file was kept (sent again, maybe with a new gil limit)
+        // is asked for whole, so a stale file is never offered or started.
+        foreach (var id in have.Keys)
+            if (!resend.Contains(id)) known.Add(id.ToString());
+        Call("ml_plugin_inbox", new JsonObject { ["p_known"] = known }, inbox, r =>
         {
             if (Body(r) is not JsonObject o) return;
             var waiting = new List<(Guid, string, DateTime, RunFile)>();
@@ -372,7 +407,24 @@ public sealed class SiteSync : IDisposable
                     if (n is not JsonObject ro || !Guid.TryParse(JsonRead.Str(ro, "id"), out var id)) continue;
                     try
                     {
-                        var file = RunFile.From(ro["run"]);
+                        // Left out as known: the file kept from before, but only if it's still the same
+                        // sending; sent again since, it's asked for whole on the next call.
+                        var sentWords = JsonRead.Str(ro, "sent_at");
+                        RunFile? file;
+                        if (ro["run"] is JsonObject)
+                        {
+                            file = RunFile.From(ro["run"]);
+                            resend.Remove(id);
+                        }
+                        else if (have.TryGetValue(id, out var kept)
+                            && (sentWords == null || !sentAtWords.TryGetValue(id, out var keptWords) || keptWords == sentWords))
+                            file = kept;
+                        else
+                        {
+                            resend.Add(id);
+                            continue;
+                        }
+                        if (sentWords != null) sentAtWords[id] = sentWords;
                         waiting.Add((id, JsonRead.Str(ro, "name") ?? file.Name, JsonRead.Time(ro, "sent_at") ?? DateTime.UtcNow, file));
                     }
                     catch (FormatException ex)
@@ -409,8 +461,12 @@ public sealed class SiteSync : IDisposable
         });
     }
 
+    /// <summary>When the run in hand's progress last went (its heartbeat).</summary>
+    private DateTime runUpdateAt;
+
     private void SendUpdate(RunFile run)
     {
+        runUpdateAt = DateTime.UtcNow;
         var progress = engine.Progress();
         var status = engine.Status;
         var runId = run.Guid;
@@ -425,6 +481,7 @@ public sealed class SiteSync : IDisposable
             ["p_status"] = RunWords.Of(status),
             ["p_progress"] = progress.ToJson(),
         };
+        if (engine.RunKey is { } key) args["p_key"] = key;
         Call("ml_plugin_run_update", args, update, r =>
         {
             if (!r.Ok)
@@ -434,8 +491,9 @@ public sealed class SiteSync : IDisposable
                 {
                     updatesRefused = runId;
                     engine.Say(HelperNames.Ledger, $"The site won't take this run's progress any more: {r.Why}");
-                    // Stopped or deleted there: it isn't carried on here (nor any more gil spent on it).
-                    if (engine.Active && engine.File?.Guid == runId) engine.Stop("The run was stopped or deleted on the site.");
+                    // Stopped or deleted there, sent again, or held by another of your plugins (another PC or game
+                    // client): it isn't carried on here (nor any more gil spent on it).
+                    if (engine.Active && engine.File?.Guid == runId) engine.Stop($"The site won't let this plugin carry it on: {r.Why ?? "it was stopped or deleted there."}");
                 }
                 return;
             }
@@ -484,17 +542,17 @@ public sealed class SiteSync : IDisposable
     }
 
     /// <summary>A run's last word, kept until the site takes it (one said again for the same run replaces it).</summary>
-    public void QueueFinal(RunFile file, RunProgress progress) => QueueFinal(file.Guid, file.Id, progress.Status, progress.ToJson());
+    public void QueueFinal(RunFile file, RunProgress progress, string? key) => QueueFinal(file.Guid, file.Id, progress.Status, progress.ToJson(), key);
 
-    /// <summary>A run's last word: its status, and its progress (null keeps what the site has).</summary>
-    public void QueueFinal(Guid id, string runId, RunStatus status, JsonObject? progress)
+    /// <summary>A run's last word: its status, its progress (null keeps what the site has), and the character carrying it out.</summary>
+    public void QueueFinal(Guid id, string runId, RunStatus status, JsonObject? progress, string? key)
     {
         finals.RemoveAll(f => f.Id == id);
-        finals.Add((id, runId, status, progress));
+        finals.Add(new Final(id, runId, status, progress, key));
         update.Changed();
     }
 
-    private void SendFinal((Guid Id, string RunId, RunStatus Status, JsonObject? Progress) f)
+    private void SendFinal(Final f)
     {
         Call("ml_plugin_run_update", FinalArgs(f), update, r =>
         {
@@ -506,12 +564,17 @@ public sealed class SiteSync : IDisposable
         });
     }
 
-    private static JsonObject FinalArgs((Guid Id, string RunId, RunStatus Status, JsonObject? Progress) f) => new()
+    private static JsonObject FinalArgs(Final f)
     {
-        ["p_run"] = f.RunId,
-        ["p_status"] = RunWords.Of(f.Status),
-        ["p_progress"] = f.Progress?.DeepClone(),
-    };
+        var args = new JsonObject
+        {
+            ["p_run"] = f.RunId,
+            ["p_status"] = RunWords.Of(f.Status),
+            ["p_progress"] = f.Progress?.DeepClone(),
+        };
+        if (f.Key != null) args["p_key"] = f.Key;
+        return args;
+    }
 
     /// <summary>
     /// The plugin is unloading: the runs' last words still waiting go now, waiting at most
@@ -527,7 +590,7 @@ public sealed class SiteSync : IDisposable
             if (left <= TimeSpan.FromMilliseconds(100)) break;
             try
             {
-                var task = site.Call("ml_plugin_run_update", FinalArgs(f), left);
+                var task = site.Call("ml_plugin_run_update", siteArgs.For("ml_plugin_run_update", FinalArgs(f)), left);
                 if (!task.Wait(left)) break;
                 if (task.Result.Ok) finals.Remove(f);
             }
@@ -563,13 +626,19 @@ public sealed class SiteSync : IDisposable
             ["p_status"] = RunWords.Of(RunStatus.Accepted),
             ["p_progress"] = Accepted(file).ToJson(),
         };
+        // The sending this is (a run sent again since is refused), and who carries it out.
+        if (sentAtWords.TryGetValue(file.Guid, out var sentAt)) args["p_sent_at"] = sentAt;
+        if (Character?.Key is { Length: > 0 } key) args["p_key"] = key;
+        var sent = siteArgs.For("ml_plugin_run_update", args);
         var gen = generation;
-        site.Call("ml_plugin_run_update", args).ContinueWith(t =>
+        site.Call("ml_plugin_run_update", sent).ContinueWith(t =>
         {
             var r = t.Status == TaskStatus.RanToCompletion ? t.Result : new RpcResult(false, null, "The call failed.", Unreachable: true);
             answers.Enqueue(() =>
             {
                 claiming = false;
+                if (siteArgs.Learn("ml_plugin_run_update", sent, r))
+                    r = new RpcResult(false, null, "The site is an older one: press Start again.");
                 if (gen != generation) r = new RpcResult(false, null, "The link changed meanwhile: try again.");
                 else if (r.TokenRefused || r.Hint == "off")
                 {
