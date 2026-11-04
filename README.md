@@ -19,7 +19,8 @@ already use to do the work.
 - **Pauses on anything unexpected**: combat, a duty, a cutscene, a zone change it didn't ask for, a
   tell, bags filling up, a price that's moved. Resume starts the step again from what your bags hold.
 - **Tells the site about you**: your crafting and gathering levels, gil and bag space, what you hold
-  (bags, crystals, saddlebags, each retainer as you open them, or through Allagan Tools), and what your
+  (bags, crystals, saddlebags, each retainer as you open them, or through Allagan Tools), your
+  currencies (scrips, tomestones, seals, MGP, gemstones and the like), and what your
   retainers list and sell, so the site plans around it and keeps your books.
 
 It drives your character and spends gil, and automation is against Square Enix's terms of service:

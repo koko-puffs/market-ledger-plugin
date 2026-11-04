@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using Lumina.Excel.Sheets;
 using MarketLedger.Automation;
 using MarketLedger.Core;
 using MarketLedger.Ipc;
@@ -12,8 +13,8 @@ using MarketLedger.Ipc;
 namespace MarketLedger.Game;
 
 /// <summary>
-/// What the character you're playing holds, for the site (<c>ml_plugin_holdings</c>): your bags and the
-/// crystals, read whenever asked; the saddlebags and each retainer as last seen open (a retainer's bags
+/// What the character you're playing holds, for the site (<c>ml_plugin_holdings</c>): your bags, the
+/// crystals and your currencies (<see cref="ReadCurrencies"/>), read whenever asked; the saddlebags and each retainer as last seen open (a retainer's bags
 /// whenever its inventory window is open, as Housing Studio's plugin counts them), kept per character in
 /// holdings.json in the plugin's folder so they're still known after a restart; and Allagan Tools'
 /// counts of your retainers when it's installed (the plugin's own count of a retainer wins). Framework
@@ -139,8 +140,74 @@ public sealed unsafe class HoldingsReader
         return loaded ? Holdings.Count(slots) : null;
     }
 
+    /// <summary>The tomestones' item ids (the game's <c>TomestonesItem</c> sheet), looked up once.</summary>
+    private uint[]? tomestones;
+
+    private uint[] Tomestones()
+    {
+        if (tomestones != null) return tomestones;
+        try
+        {
+            tomestones = Services.Data.GetExcelSheet<TomestonesItem>().Select(r => r.Item.RowId).Where(id => id != 0).Distinct().ToArray();
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Warning(ex, "Market Ledger couldn't read the game's list of tomestones: they're counted from the Currency container alone");
+            tomestones = Array.Empty<uint>();
+        }
+        return tomestones;
+    }
+
     /// <summary>
-    /// Everything held, place by place: your bags, the crystals, the saddlebags (as last seen), each
+    /// Your currencies' balances (<see cref="Currencies"/>: gil left out, never added to the totals), or null
+    /// while the game hasn't sent its Currency container (just after logging in). Read from:
+    /// <list type="bullet">
+    /// <item>the Currency container (<c>InventoryType.Currency</c>, 2000), every slot: gil, the Grand Company
+    /// seals, Wolf Marks, Allied Seals, MGP and the Allagan tomestones live there;</item>
+    /// <item><c>InventoryManager</c>'s own counters: <c>GetCompanySeals(1–3)</c> (Storm, Serpent, Flame Seals),
+    /// <c>GetGoldSaucerCoin</c> (MGP), <c>GetWolfMarks</c>, <c>GetAlliedSeals</c>, and <c>GetTomestoneCount</c>
+    /// for each tomestone in the game's <c>TomestonesItem</c> sheet;</item>
+    /// <item><c>CurrencyManager</c>'s <c>SpecialItemBucket</c> (the scrips, Centurio Seals) and <c>ItemBucket</c>
+    /// (Sacks of Nuts, Bicolor Gemstones, Skybuilders' Scrips, Trophy Crystals, the allied societies'
+    /// currencies, ventures…), every item in them by <c>GetItemCount</c>, so a new currency appears without
+    /// a change here (its <c>ContentItemBucket</c>, Island Sanctuary's and Bozja's, held only while there, isn't);</item>
+    /// <item>and <see cref="Currencies.Named"/> one by one (<c>CurrencyManager.GetItemCount</c>, or
+    /// <c>InventoryManager.GetInventoryItemCount</c> if it doesn't have it).</item>
+    /// </list>
+    /// A currency read twice is counted once (<see cref="Currencies.Place"/>).
+    /// </summary>
+    private Place? ReadCurrencies(InventoryManager* mgr)
+    {
+        var container = mgr->GetInventoryContainer(InventoryType.Currency);
+        if (container == null || !container->IsLoaded) return null;
+        var read = new List<(uint, long)>();
+        for (var i = 0; i < container->Size; i++)
+        {
+            var item = container->GetInventorySlot(i);
+            if (item == null || item->IsEmpty()) continue;
+            read.Add((item->GetBaseItemId(), item->GetQuantity()));
+        }
+        for (byte gc = 1; gc <= 3; gc++) read.Add((Currencies.SealsOf(gc), mgr->GetCompanySeals(gc)));
+        read.Add((Currencies.Mgp, mgr->GetGoldSaucerCoin()));
+        read.Add((Currencies.WolfMarks, mgr->GetWolfMarks()));
+        read.Add((Currencies.AlliedSeals, mgr->GetAlliedSeals()));
+        foreach (var id in Tomestones()) read.Add((id, mgr->GetTomestoneCount(id)));
+        var cm = CurrencyManager.Instance();
+        if (cm != null)
+        {
+            var ids = new List<uint>();
+            foreach (var id in cm->SpecialItemBucket.Keys) ids.Add(id);
+            foreach (var id in cm->ItemBucket.Keys) ids.Add(id);
+            foreach (var id in ids)
+                if (id != 0) read.Add((id, cm->GetItemCount(id)));
+        }
+        foreach (var id in Currencies.Named)
+            read.Add((id, cm != null && cm->HasItem(id) ? cm->GetItemCount(id) : mgr->GetInventoryItemCount(id)));
+        return Currencies.Place(read);
+    }
+
+    /// <summary>
+    /// Everything held, place by place: your bags, the crystals, your currencies, the saddlebags (as last seen), each
     /// retainer (as last seen, or Allagan Tools' count of one not seen; named from the game's list or
     /// AutoRetainer's). Empty when you aren't logged in.
     /// </summary>
@@ -152,6 +219,7 @@ public sealed unsafe class HoldingsReader
         if (me.Length == 0 || me == "0" || mgr == null) return places;
         if (Read(mgr, InGame.Bags) is { } bags) places.Add(new Place("Bags", "bags", bags));
         if (Read(mgr, new[] { InventoryType.Crystals }) is { } crystals) places.Add(new Place("Crystals", "crystals", crystals));
+        if (ReadCurrencies(mgr) is { } currencies) places.Add(currencies);
         record.TryGetValue(me, out var mine);
         if (mine?.Saddlebag is { } sb) places.Add(new Place(SaddlebagPlace, "saddlebag", sb.Items));
         var seen = new HashSet<ulong>();

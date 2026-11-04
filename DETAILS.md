@@ -243,7 +243,7 @@ newer optional arguments (`p_known`, `p_sent_at`, `p_key`) are sent; a site that
 | function | when | what |
 | --- | --- | --- |
 | `ml_plugin_hello` (p_character) | logging in, another character, every 10 minutes | `{ key, name, world, dc, jobs, gil, freeSlots }`; its `account` is shown as linked |
-| `ml_plugin_holdings` (p_key, p_items, p_places) | when what you hold changes, at most every 2 minutes | totals, and each place `{ place, kind, items }`: Bags, Crystals, Saddlebag (as last seen), each retainer (as last seen open, else Allagan Tools' count; 12 at most, the ones seen most lately) |
+| `ml_plugin_holdings` (p_key, p_items, p_places) | when what you hold changes, at most every 2 minutes | totals, and each place `{ place, kind, items }`: Bags, Crystals, Currencies (kind `currency`: your currencies' balances, gil left out), Saddlebag (as last seen), each retainer (as last seen open, else Allagan Tools' count; 12 at most, the ones seen most lately). The totals (`p_items`) are the materials only: the currencies are never added to them. A currency changing (a scrip turn-in, say) is a change like any other (looked for every 10 s, sent at most every 2 minutes) |
 | `ml_plugin_inbox` (p_known) | every 30 s; every 6 s while a run is in hand | `p_known`: the ids of the runs whose files the plugin has (in hand, and waiting), whose `run` and `progress` the site then leaves out (the files kept from before are used). The runs sent (read and checked: one that can't be read is logged and left out; one this plugin has had in hand isn't offered again; each one's `sent_at` kept as the site wrote it); a pending command it shows for the run in hand makes the next run update go at once; the first after loading, its `active` runs (`ActiveRun`: id, name, status, command, run, progress, `taken_key`), to pick up the one this install had in hand (carried on only by the character in `taken_key`) |
 | `ml_plugin_run_update` (p_run, p_status, p_progress, p_sent_at, p_key) | taking a run (it sends "accepted", the claim, before it starts, with `p_sent_at`, the inbox's `sent_at` for the sending it has, so a run sent again since is refused); each change (at most every 2 s); every 15 s while running and at least every 45 s in every other status while a run is held (the site takes a plugin silent for 2 minutes to be gone: its Stop then finishes the run, and another plugin may take it over); each run's last word (done, stopped, failed; paused on unloading) | `p_key` on every call: the character carrying the run out (the site holds a run for one plugin and character; another's word on it is refused with `run`, and the run then stops here). `RunProgress`, the status never `sent` or `draft`; its answer's `command` (handed over once there) is obeyed. Last words are queued by run (`SiteSync.QueueFinal`) and sent before the run in hand's progress, again after a failure, until the site takes each (or refuses it as `run`, `data` or `size`): starting another run never loses the one put aside. On unloading what's queued goes at once, waited for 2 s at most |
 | `ml_plugin_sales` (p_key, p_sales) | a retainer's sale history window read with new sales | `[{ retainer, item, hq, quantity, price, at }]`, at most 500 a call, each sale once (by its key) |
@@ -265,6 +265,37 @@ character record reaches the plugin as JSON (Dalamud converts a type the plugin 
 Newtonsoft), read by `Holdings.RetainerNamesFromJson`, asked at most every 5 minutes. The retainer's
 windows (sell list, sale history) are read once a second; what's waiting to be sent for one character
 is dropped when another logs in.
+
+**Your currencies** (`Game/HoldingsReader.cs`, `ReadCurrencies`; the place is built by `Currencies.Place`
+in `Core/Ledger.cs`): read with your bags (every 10 s), sent as the place `{ place: "Currencies", kind:
+"currency", items: { "<currency item id>": amount } }`, never in the totals (`Holdings.Total` skips the
+kind). Read from (FFXIVClientStructs, `FFXIVClientStructs/FFXIV/Client/Game/`):
+
+- the **Currency container**, `InventoryManager.GetInventoryContainer(InventoryType.Currency)`
+  (`InventoryType.cs:11`, 2000; `InventoryManager.cs:58`), every slot (`GetBaseItemId`, `GetQuantity`):
+  gil, the Grand Company seals, Wolf Marks, Allied Seals, MGP and the Allagan tomestones are kept there
+  (FFXIVClientStructs doesn't list its slots, so it's read whole). Until the game has sent it (just
+  after logging in) no currency place is sent at all.
+- `InventoryManager`'s own counters (`InventoryManager.cs`): `GetCompanySeals(1–3)` (:119; 1 the
+  Maelstrom's Storm Seals, item 20; 2 the Twin Adder's Serpent Seals, 21; 3 the Immortal Flames' Flame
+  Seals, 22: `Currencies.SealsOf`), `GetGoldSaucerCoin` (:110, MGP, 29), `GetWolfMarks` (:113, 25),
+  `GetAlliedSeals` (:116, 27), and `GetTomestoneCount(item)` (:125) for every tomestone in the game's
+  `TomestonesItem` sheet (Lumina, looked up once).
+- **`CurrencyManager`** (`CurrencyManager.cs`, `Instance()` :8): every item in its `SpecialItemBucket`
+  (:26: the White, Purple and Orange Crafters' and Gatherers' Scrips, Centurio Seals) and its
+  `ItemBucket` (:72: Sacks of Nuts, Bicolor Gemstones, Skybuilders' Scrips, Trophy Crystals, the allied
+  societies' currencies, ventures, MGF…), each by `GetItemCount(item)` (:205), so a currency the game
+  adds later is sent without a change here. Its `ContentItemBucket` (:196: Island Sanctuary's
+  materials, Bozjan Clusters), held only while you're there, isn't read.
+- and `Currencies.Named` one by one (Centurio Seals 10307, Sacks of Nuts 26533, Bicolor Gemstones
+  26807, Trophy Crystals 36656): `CurrencyManager.GetItemCount` when it `HasItem` (:220), else
+  `InventoryManager.GetInventoryItemCount` (:64).
+
+A currency read in two of these is counted once (the larger: it's the same balance); gil (item 1, said in
+`ml_plugin_hello`), id 0 and nothing held are left out; each amount is at most 100,000,000, and 200
+currencies at most (the lowest ids), as the site keeps them. **Not checked in the game yet**: which
+items the Currency container and the buckets hold is as FFXIVClientStructs' notes and other plugins
+(GatherBuddy Reborn's vendor currencies) say.
 
 **Listings** (`Game/RetainerMarket.cs`): while the retainer's sell list (`RetainerSellList`) is open,
 the game's `RetainerMarket` container and each slot's price (`InventoryManager.GetRetainerMarketPrice`),
@@ -351,7 +382,7 @@ only added (a missing one is its default).
 
 - `Core/`: game-free, unit-tested (`MarketLedger.Tests` compiles these files directly, without
   Dalamud): the run file and progress, the counts, the market rule, pacing, the site's calls and
-  token, holdings and sales, the IPC guard, Eorzea time, the step queue and window calls.
+  token, holdings (currencies too) and sales, the IPC guard, Eorzea time, the step queue and window calls.
 - `Game/`: reading and doing in the game (bags, retainers, vendors, the board's listings, the
   player, movement).
 - `Automation/`: the windows and clicks, with where each came from (`ErrandTable`, `UiTable`,
@@ -392,4 +423,4 @@ release, which makes its entry.
 
 The first version: runs from the site carried out step by step with Artisan, GatherBuddy Reborn,
 Lifestream and vnavmesh; retainers, vendors and the market board by the plugin's own clicks; your
-character, holdings, listings and sales sent to the site.
+character, holdings (with your currencies as a place of their own), listings and sales sent to the site.

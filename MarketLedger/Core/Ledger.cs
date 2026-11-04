@@ -7,20 +7,26 @@ using System.Text.Json.Nodes;
 
 namespace MarketLedger.Core;
 
-/// <summary>One place things are held: your bags, the crystals, the saddlebags, a retainer.</summary>
-/// <param name="Kind">"bags", "crystals", "saddlebag" or "retainer", as types.ts has it.</param>
+/// <summary>One place things are held: your bags, the crystals, the saddlebags, a retainer, your currencies.</summary>
+/// <param name="Kind">"bags", "crystals", "saddlebag", "retainer" or "currency", as types.ts has it.</param>
 public sealed record Place(string Name, string Kind, IReadOnlyDictionary<uint, int> Items);
 
 /// <summary>What a character holds, as the site takes it (<c>ml_plugin_holdings</c>). Pure, so it's tested.</summary>
 public static class Holdings
 {
-    /// <summary>Every place's items together (HQ counted with NQ, as read).</summary>
+    /// <summary>
+    /// Every place's items together (HQ counted with NQ, as read): the materials. The currencies' place
+    /// (<see cref="Currencies.Kind"/>) is left out: they aren't materials, and the site values them apart.
+    /// </summary>
     public static Dictionary<uint, int> Total(IEnumerable<Place> places)
     {
         var total = new Dictionary<uint, int>();
         foreach (var p in places)
+        {
+            if (p.Kind == Currencies.Kind) continue;
             foreach (var (id, n) in p.Items)
                 if (n > 0) total[id] = total.GetValueOrDefault(id) + n;
+        }
         return total;
     }
 
@@ -97,6 +103,75 @@ public static class Holdings
             if (id != 0) names[id] = name;
         }
         return names;
+    }
+}
+
+/// <summary>
+/// The character's currencies, as one place for the site (<c>{ place: "Currencies", kind: "currency",
+/// items: { currency item id: amount } }</c>): scrips, tomestones, Grand Company seals, MGP, Wolf Marks,
+/// hunt seals, Bicolor Gemstones, allied societies' currencies and the like, read by
+/// <c>Game/HoldingsReader.cs</c> from the game's Currency container, its <c>CurrencyManager</c> and
+/// <c>InventoryManager</c>'s own counters. Never added to the totals (<see cref="Holdings.Total"/>). Pure, so it's tested.
+/// </summary>
+public static class Currencies
+{
+    /// <summary>The place's kind, as types.ts and <c>ml_plugin_holdings</c> have it.</summary>
+    public const string Kind = "currency";
+
+    /// <summary>The place's name.</summary>
+    public const string PlaceName = "Currencies";
+
+    /// <summary>Gil: said in <c>ml_plugin_hello</c>, never a currency here.</summary>
+    public const uint Gil = 1;
+
+    /// <summary>The most of one currency the site keeps (as for any item count).</summary>
+    public const int MaxAmount = 100_000_000;
+
+    /// <summary>The most currencies the site keeps (the lowest ids first).</summary>
+    public const int MaxCurrencies = 200;
+
+    public const uint StormSeals = 20;
+    public const uint SerpentSeals = 21;
+    public const uint FlameSeals = 22;
+    public const uint WolfMarks = 25;
+    public const uint AlliedSeals = 27;
+    public const uint Mgp = 29;
+    public const uint CenturioSeals = 10307;
+    public const uint SacksOfNuts = 26533;
+    public const uint BicolorGemstones = 26807;
+    public const uint TrophyCrystals = 36656;
+
+    /// <summary>A Grand Company's seals (the game's company ids: 1 the Maelstrom, 2 the Order of the Twin Adder, 3 the Immortal Flames), or 0.</summary>
+    public static uint SealsOf(byte grandCompany) => grandCompany switch
+    {
+        1 => StormSeals,
+        2 => SerpentSeals,
+        3 => FlameSeals,
+        _ => 0,
+    };
+
+    /// <summary>Currencies read one by one besides those found by looking through the game's lists (in case a list misses one).</summary>
+    public static readonly uint[] Named = { CenturioSeals, SacksOfNuts, BicolorGemstones, TrophyCrystals };
+
+    /// <summary>
+    /// The place from what was read, (currency item id, amount) from wherever: gil, id 0 and nothing
+    /// held left out; one currency read in two places (the Currency container and a counter, say)
+    /// counted once, the larger (it's the same balance, read twice); each at most
+    /// <see cref="MaxAmount"/>; at most <see cref="MaxCurrencies"/>, the lowest ids first.
+    /// </summary>
+    public static Place Place(IEnumerable<(uint Item, long Amount)> readings)
+    {
+        var amounts = new Dictionary<uint, int>();
+        foreach (var (item, amount) in readings)
+        {
+            if (item == 0 || item == Gil || amount <= 0) continue;
+            var n = (int)Math.Min(MaxAmount, amount);
+            if (n > amounts.GetValueOrDefault(item)) amounts[item] = n;
+        }
+        var kept = amounts.Count <= MaxCurrencies
+            ? amounts
+            : amounts.OrderBy(kv => kv.Key).Take(MaxCurrencies).ToDictionary(kv => kv.Key, kv => kv.Value);
+        return new Place(PlaceName, Kind, kept);
     }
 }
 

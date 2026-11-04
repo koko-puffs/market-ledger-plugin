@@ -25,9 +25,11 @@
   here, in camelCase JSON. Change both together, and the sample in `MarketLedger.Tests/RunFileTests.cs`.
 - The site's functions for the plugin (`ml_plugin_…`) are in kokos-tools' migration
   `supabase/migrations/20261104055050_ml_market_ledger.sql`, changed in place by
-  `20261104064340_ml_hardening.sql` (who holds a run, `p_sent_at`, `p_key`, the inbox's `active` runs):
+  `20261104064340_ml_hardening.sql` (who holds a run, `p_sent_at`, `p_key`, the inbox's `active` runs)
+  and `20261104072706_ml_currency_places.sql` (`ml_plugin_holdings` takes a place of kind `currency`):
   their arguments, answers, refusal hints and hourly limits are what `Session/SiteSync.cs` is written
-  against.
+  against. The holdings' place kinds (`bags`, `crystals`, `saddlebag`, `retainer`, `currency`) are the
+  site's `Holdings` in `model/types.ts`, `Place` in `Core/Ledger.cs` here and that function's list.
 
 ## Building
 

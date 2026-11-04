@@ -18,7 +18,8 @@ namespace MarketLedger.Session;
 /// <item><c>ml_plugin_hello</c>: who you're playing (its key, name, world, data centre, the crafting and
 /// gathering jobs' levels, gil, free bag slots), when you log in and every 10 minutes; its answer says
 /// whose account the token is.</item>
-/// <item><c>ml_plugin_holdings</c>: what you hold, place by place, when it changes, at most every 2 minutes.</item>
+/// <item><c>ml_plugin_holdings</c>: what you hold, place by place (your currencies too, as their own place,
+/// never in the totals), when it changes, at most every 2 minutes.</item>
 /// <item><c>ml_plugin_inbox</c>: the runs sent from the site (every 30 s; every 6 s while a run is in hand),
 /// a pending command for the run in hand, and (once, after loading) the run this plugin had in hand.</item>
 /// <item><c>ml_plugin_run_update</c>: taking a run before it starts (<see cref="Claim"/>: "accepted"), then its
@@ -250,7 +251,7 @@ public sealed class SiteSync : IDisposable
             listingsWaiting = null;
         }
         else if (before != null && (before.Gil != c.Gil || before.FreeSlots != c.FreeSlots)) Version++;
-        // What's held: looked at every 10 s, sent when it's changed (at most every 2 min).
+        // What's held (currencies too, so a scrip turn-in shows): looked at every 10 s, sent when it's changed (at most every 2 min).
         if (holdings.Version != holdingsVersion || now - holdingsLookedAt > TimeSpan.FromSeconds(10))
         {
             holdingsVersion = holdings.Version;
@@ -377,6 +378,7 @@ public sealed class SiteSync : IDisposable
         var args = new JsonObject
         {
             ["p_key"] = c.Key,
+            // The materials only: the currencies' place is sent in p_places, never added here.
             ["p_items"] = SiteLink.Counts(Holdings.Total(places)),
             ["p_places"] = Holdings.PlacesJson(places),
         };

@@ -424,6 +424,97 @@ public class LedgerTests
     }
 
     [Fact]
+    public void CurrenciesAreAPlaceOfTheirOwnWithoutGil()
+    {
+        var place = Currencies.Place(new (uint, long)[]
+        {
+            (Currencies.Gil, 1_234_567), // gil: said in hello, never a currency
+            (0, 50),
+            (28, 1400), // Poetics, from the Currency container
+            (28, 1400), // and from GetTomestoneCount: the same balance, counted once
+            (Currencies.StormSeals, 0), // a company you aren't in
+            (Currencies.SerpentSeals, 90_000),
+            (Currencies.Mgp, 250_000_000), // past what the site keeps
+            (41784, 3999), // Orange Crafters' Scrip, from CurrencyManager
+            (Currencies.BicolorGemstones, 12),
+            (Currencies.BicolorGemstones, 7), // an older reading elsewhere: the larger stands
+            (Currencies.WolfMarks, -3),
+        });
+        Assert.Equal("Currencies", place.Name);
+        Assert.Equal("currency", place.Kind);
+        Assert.False(place.Items.ContainsKey(Currencies.Gil));
+        Assert.False(place.Items.ContainsKey(0));
+        Assert.False(place.Items.ContainsKey(Currencies.StormSeals));
+        Assert.False(place.Items.ContainsKey(Currencies.WolfMarks));
+        Assert.Equal(1400, place.Items[28]);
+        Assert.Equal(90_000, place.Items[Currencies.SerpentSeals]);
+        Assert.Equal(Currencies.MaxAmount, place.Items[Currencies.Mgp]);
+        Assert.Equal(3999, place.Items[41784]);
+        Assert.Equal(12, place.Items[Currencies.BicolorGemstones]);
+        Assert.Equal(5, place.Items.Count);
+        var json = Holdings.PlacesJson(new[] { place });
+        Assert.Equal("Currencies", json[0]!["place"]!.GetValue<string>());
+        Assert.Equal("currency", json[0]!["kind"]!.GetValue<string>());
+        Assert.Equal(1400, json[0]!["items"]!["28"]!.GetValue<int>());
+        Assert.Null(json[0]!["items"]!["1"]);
+    }
+
+    [Fact]
+    public void CurrenciesAreNeverInTheTotals()
+    {
+        // Bicolor Gemstones held as a currency and (made up) as an item in the bags: only the bags count.
+        var places = new[]
+        {
+            new Place("Bags", "bags", new Dictionary<uint, int> { [5] = 60, [Currencies.BicolorGemstones] = 2 }),
+            Currencies.Place(new (uint, long)[] { (Currencies.BicolorGemstones, 500), (28, 1400), (Currencies.Gil, 9) }),
+            new Place("Mimi", "retainer", new Dictionary<uint, int> { [5] = 240 }),
+        };
+        var total = Holdings.Total(places);
+        Assert.Equal(300, total[5]);
+        Assert.Equal(2, total[Currencies.BicolorGemstones]);
+        Assert.False(total.ContainsKey(28));
+        Assert.False(total.ContainsKey(Currencies.Gil));
+        Assert.Equal(3, Holdings.PlacesJson(places).Count);
+    }
+
+    [Fact]
+    public void ACurrencyChangeChangesTheFingerprint()
+    {
+        Place[] Held(long scrips) => new[]
+        {
+            new Place("Bags", "bags", new Dictionary<uint, int> { [5] = 60 }),
+            Currencies.Place(new (uint, long)[] { (41784, scrips), (28, 1400) }),
+        };
+        Assert.Equal(Holdings.Fingerprint(Held(3999)), Holdings.Fingerprint(Held(3999)));
+        // A scrip turn-in: the site hears of it.
+        Assert.NotEqual(Holdings.Fingerprint(Held(3999)), Holdings.Fingerprint(Held(3000)));
+        Assert.NotEqual(Holdings.Fingerprint(Held(3999)), Holdings.Fingerprint(Held(0)));
+        // The bags' total is the same either way.
+        Assert.Equal(Holdings.Total(Held(3999)), Holdings.Total(Held(3000)));
+    }
+
+    [Fact]
+    public void CurrenciesKeepTheLowestIdsWhenThereAreTooMany()
+    {
+        var place = Currencies.Place(Enumerable.Range(2, Currencies.MaxCurrencies + 50).Select(i => ((uint)i * 3, 1L)));
+        Assert.Equal(Currencies.MaxCurrencies, place.Items.Count);
+        Assert.True(place.Items.ContainsKey(6));
+        Assert.False(place.Items.ContainsKey((uint)(Currencies.MaxCurrencies + 51) * 3));
+        // An empty reading is still a place (you spent them all): the site hears of that too.
+        Assert.Empty(Currencies.Place(Array.Empty<(uint, long)>()).Items);
+    }
+
+    [Fact]
+    public void GrandCompanySealsByCompany()
+    {
+        Assert.Equal(20u, Currencies.SealsOf(1));
+        Assert.Equal(21u, Currencies.SealsOf(2));
+        Assert.Equal(22u, Currencies.SealsOf(3));
+        Assert.Equal(0u, Currencies.SealsOf(0));
+        Assert.Equal(0u, Currencies.SealsOf(4));
+    }
+
+    [Fact]
     public void HqAndCollectableIdsCountAsTheItem()
     {
         var c = Holdings.Count(new (uint, long)[] { (5, 10), (1_000_005, 2), (500_005, 1), (0, 9), (7, 0) });
