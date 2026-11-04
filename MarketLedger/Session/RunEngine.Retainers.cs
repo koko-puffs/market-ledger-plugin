@@ -163,7 +163,7 @@ public sealed partial class RunEngine
                         return Finished();
                     }
                     var room = InGame.FreeSlots() - Math.Max(0, config.KeepFreeSlots);
-                    if (room < MarketRule.NewSlots(InGame.NqCount(line.Item), slot.Quantity, stack))
+                    if (!InGame.IsCrystal(line.Item) && room < MarketRule.NewSlots(InGame.NqCount(line.Item), slot.Quantity, stack))
                         return StepOutcome.Halt($"Your bags are nearly full ({InGame.FreeSlots()} free slots, {config.KeepFreeSlots} kept free): the stack of {slot.Quantity} needs more.");
                     before = InGame.BagCount(line.Item);
                     menuReopened = false;
@@ -212,7 +212,7 @@ public sealed partial class RunEngine
                     if (GameUi.IsOpen("InputNumeric"))
                     {
                         GameUi.Close("InputNumeric");
-                        return StepOutcome.Halt("The game asked how many to take: that isn't done yet.");
+                        return StepOutcome.Halt($"The game asked how many {name} to take (crystals do): take them yourself, then Resume.");
                     }
                     var now = InGame.BagCount(line.Item);
                     if (now <= before) return StepOutcome.Waiting;

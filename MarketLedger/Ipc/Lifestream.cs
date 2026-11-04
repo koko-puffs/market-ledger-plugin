@@ -59,11 +59,19 @@ public sealed class Lifestream
     /// <summary>Teleports to an aetheryte. False when Lifestream wouldn't.</summary>
     public bool Teleport(uint aetheryte) => guard.Call("Teleport", () => teleport.InvokeFunc(aetheryte, 0), false);
 
-    /// <summary>The city's aethernet to a shard, by its name (standing at the aetheryte). False when Lifestream wouldn't.</summary>
-    public bool Aethernet(string destination) => guard.Call("AethernetTeleport", () => aethernet.InvokeFunc(destination), false) || Command(destination);
+    // The "/li" command is the way only when the IPC call isn't there at all (an older Lifestream): a call
+    // that answers false said no (Lifestream busy, or a place it can't go), and the command would go anyway.
 
-    /// <summary>A world visit on your data centre (or back to your home world).</summary>
-    public bool ChangeWorld(string world) => guard.Call("ChangeWorld", () => changeWorld.InvokeFunc(world), false) || Command(world);
+    /// <summary>The city's aethernet to a shard, by its name (standing at the aetheryte). False when Lifestream wouldn't.</summary>
+    public bool Aethernet(string destination) =>
+        guard.Call<bool?>("AethernetTeleport", () => aethernet.InvokeFunc(destination), null) ?? Command(destination);
+
+    /// <summary>
+    /// A world visit (or back to your home world). Lifestream's <c>ChangeWorld</c> crosses to another data
+    /// centre too when the world is in one, so callers check <see cref="CanVisit"/> (the same data centre) first.
+    /// </summary>
+    public bool ChangeWorld(string world) =>
+        guard.Call<bool?>("ChangeWorld", () => changeWorld.InvokeFunc(world), null) ?? Command(world);
 
     /// <summary>Whether a world can be visited from here (null when Lifestream doesn't say).</summary>
     public bool? CanVisit(string world) => guard.Call<bool?>("CanVisitSameDC", () => canVisitSameDc.InvokeFunc(world), null);

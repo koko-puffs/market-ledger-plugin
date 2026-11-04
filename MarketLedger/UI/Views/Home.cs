@@ -21,6 +21,7 @@ public sealed partial class MainWindow
     private readonly Memo<long> gilText = new();
     private readonly Memo<int> slotsText = new();
     private readonly Dictionary<Guid, string> inboxLines = new();
+    private IReadOnlyList<WaitingRun>? inboxLinesFor;
     private readonly List<Kit.Fact> runFacts = new(4);
     private readonly Memo<int> waitingWords = new();
 
@@ -91,11 +92,7 @@ public sealed partial class MainWindow
         var at = Kit.At;
         var w = Kit.Width;
         var dl = Kit.Dl;
-        var x = at.X;
-        x += Txt.Line(dl, new Vector2(x, at.Y), who.Name, Face.SansMedium, 13, Palette.Ink, 22);
-        x += Txt.Line(dl, new Vector2(x, at.Y), " · ", Face.Sans, 13, Palette.Faint, 22);
-        x += Txt.Line(dl, new Vector2(x, at.Y), who.World, Face.Sans, 13, Palette.Muted, 22);
-        // On the right: the gil and the free slots, numbers in mono.
+        // On the right: the gil and the free slots, numbers in mono (laid first, so a long name is cut short of them).
         var right = at.X + w;
         if (who.FreeSlots is { } slots)
         {
@@ -112,6 +109,14 @@ public sealed partial class MainWindow
             Kit.Coin(new Vector2(right, at.Y), S(22));
             right -= Txt.Measure(g, Face.Mono, 12).X;
             Txt.Line(dl, new Vector2(right, at.Y), g, Face.Mono, 12, Palette.Soft, 22);
+            right -= S(16);
+        }
+        var x = at.X;
+        x += Txt.Line(dl, new Vector2(x, at.Y), Txt.Fit(who.Name, Face.SansMedium, 13, MathF.Max(S(40), right - x)), Face.SansMedium, 13, Palette.Ink, 22);
+        if (x + S(40) < right)
+        {
+            x += Txt.Line(dl, new Vector2(x, at.Y), " · ", Face.Sans, 13, Palette.Faint, 22);
+            Txt.Line(dl, new Vector2(x, at.Y), Txt.Fit(who.World, Face.Sans, 13, right - x), Face.Sans, 13, Palette.Muted, 22);
         }
         Kit.Reserve(at, w, S(22));
         Kit.Gap(18);
@@ -175,7 +180,7 @@ public sealed partial class MainWindow
         if (!string.IsNullOrEmpty(run.Message))
         {
             Kit.Gap(12);
-            Lines.Para(run.Message, MessageColor(run.Status));
+            RunMessage("##home-ended", run, 13, 19.5f);
         }
         Kit.Gap(16);
         RunButtons(0, run, true);
@@ -204,6 +209,33 @@ public sealed partial class MainWindow
             var head = $"Step {r.StepIndex + 1} of {r.Steps.Count}";
             return kind != null ? $"{head} · {kind}" : head;
         });
+    }
+
+    /// <summary>
+    /// The run's message. A run that was stopped or failed (by you, by the site, or because the run was
+    /// deleted there) says so in a red box with its reason, so it can't be missed; otherwise a line.
+    /// </summary>
+    private static void RunMessage(string id, RunState run, int px, float lineCss)
+    {
+        var message = run.Message ?? string.Empty;
+        if (run.Status is not (RunStatus.Stopped or RunStatus.Failed))
+        {
+            Lines.Para(message, MessageColor(run.Status), px, lineCss);
+            return;
+        }
+        Kit.BeginPanel(id, 10, 12, 10, Palette.DangerWash, Palette.DangerEdge, Palette.RadiusMd);
+        var at = Kit.At;
+        var w = Kit.Width;
+        var dl = Kit.Dl;
+        var lh = S(lineCss);
+        Icons.Draw(dl, Icon.AlertTriangle, new Vector2(at.X, at.Y + (lh - S(14)) / 2), S(14), Palette.Danger);
+        var x = at.X + S(14 + 8);
+        var head = run.Status == RunStatus.Failed ? "Failed" : "Stopped";
+        var hw = Txt.Line(dl, new Vector2(x, at.Y), head, Face.SansMedium, px, Palette.Danger, lineCss);
+        var mx = x + hw + S(6);
+        var h = Lines.Draw(dl, new Vector2(mx, at.Y), MathF.Max(S(60), at.X + w - mx), message, Face.Sans, px, Palette.Soft, lineCss);
+        Kit.Reserve(at, w, MathF.Max(lh, h));
+        Kit.EndPanel();
     }
 
     private static Vector4 MessageColor(RunStatus s) => s switch
@@ -272,12 +304,28 @@ public sealed partial class MainWindow
             const string skip = "Skip step";
             if (Kit.Button(Ids.Of("##run-skip", where), row.Next(Kit.ButtonWidth(skip, BtnSize.Tiny, Icon.SkipForward), h), skip, Btn.Glass, BtnSize.Tiny, Icon.SkipForward,
                     0, false, "Leaves this step as it is and goes on to the next"))
+            {
+                // The answer may come after the step has moved on (or the site skipped it): it skips the
+                // step it was asked about, or nothing.
+                var (fileId, stepIndex) = (run.File.Id, run.StepIndex);
                 Ask("Skip this step?", "Market Ledger leaves the step as it is and goes on to the next. Steps after it may come up short of what they need.",
-                    "Skip it", "Keep going", session.SkipStep);
+                    "Skip it", "Keep going", () =>
+                    {
+                        if (session.Current is { } now && now.File.Id == fileId && now.StepIndex == stepIndex && Ui.Going(now.Status)) session.SkipStep();
+                        else Notify("That step had already moved on: nothing skipped");
+                    });
+            }
             const string stop = "Stop";
             if (Kit.Button(Ids.Of("##run-stop", where), row.Next(Kit.ButtonWidth(stop, BtnSize.Tiny, Icon.Square, Btn.Danger), h), stop, Btn.Danger, BtnSize.Tiny, Icon.Square))
-                Ask("Stop this run?", "It stops where it is and hands the helpers back. What's done stays done, and the site keeps the run's progress.",
-                    "Stop the run", "Keep going", session.Stop, danger: true);
+            {
+                // Only the run it was asked about (not one started from the HUD meanwhile).
+                var fileId = run.File.Id;
+                Ask("Stop this run?", "It stops where it is and hands the helpers back. What's done stays done, and the site is told it was stopped.",
+                    "Stop the run", "Keep going", () =>
+                    {
+                        if (session.Current is { } now && now.File.Id == fileId) session.Stop();
+                    }, danger: true);
+            }
         }
         if (withOpen)
         {
@@ -294,8 +342,20 @@ public sealed partial class MainWindow
     private void DrawInbox(RunState? current)
     {
         var inbox = session.Inbox;
+        // A new list from the site: the lines made for the old one go (a name changed, "Sent 07:51" was today).
+        if (!ReferenceEquals(inbox, inboxLinesFor))
+        {
+            inboxLinesFor = inbox;
+            inboxLines.Clear();
+        }
         Kit.Section("Sent from the site", inbox.Count == 0 ? null : waitingWords.Get(inbox.Count, static n => $"{n} waiting"));
         Kit.Gap(10);
+        // Why the last Start didn't (the run in hand already stopped, the game in a cutscene…).
+        if (session.Notice is { Length: > 0 } notice)
+        {
+            Lines.Para(notice, Palette.Loss, 13, 19.5f);
+            Kit.Gap(10);
+        }
         if (inbox.Count == 0)
         {
             Lines.Para("Runs you send from kokos-tools.com wait here until you start them. They arrive by themselves while the plugin is linked.");
@@ -328,8 +388,8 @@ public sealed partial class MainWindow
             {
                 var id = run.Id;
                 if (going)
-                    Ask("Start this one now?", "The run in hand stops where it is (the site keeps its progress) and this one starts.",
-                        "Start it now", "Not yet", () => session.Start(id));
+                    Ask("Start this one now?", $"\"{current!.File.Name}\" is stopped where it is (the site is told) and this one starts.",
+                        "Stop it and start", "Not yet", () => session.Start(id), danger: true);
                 else Later(() => session.Start(id));
             }
             if (going)
@@ -373,7 +433,7 @@ public sealed partial class MainWindow
         if (inboxLines.TryGetValue(run.Id, out var line)) return line;
         var max = (long)run.File.MaxGil;
         var minutes = (double)run.File.Estimate.Minutes;
-        line = $"Sent {Ui.When(run.SentAt)} · {Ui.Plural(System.Linq.Enumerable.Count(run.File.Steps), "step", "steps")}"
+        line = $"Sent {Ui.When(run.SentAt)} · {Ui.Plural(run.File.Steps.Count, "step", "steps")}"
                + (max > 0 ? $" · up to {Ui.Gil(max)} gil" : string.Empty)
                + (minutes > 0 ? $" · {Ui.About(minutes)}" : string.Empty);
         return inboxLines[run.Id] = line;

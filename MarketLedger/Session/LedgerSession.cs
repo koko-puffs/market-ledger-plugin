@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Nodes;
 using Dalamud.Game.Text;
 using MarketLedger.Core;
 using MarketLedger.Game;
@@ -30,6 +31,13 @@ public sealed class LedgerSession : IDisposable
         lastToken = config.Token;
         engine = new RunEngine(config, vendors);
         sync = new SiteSync(config, engine, holdings, allagan);
+        engine.CharacterKey = () => sync.Character?.Key;
+        sync.ActiveSeen += PickUp;
+        sync.FinalTaken += (id, status) =>
+        {
+            // The site has heard this run's end: it's nobody's to pick up again.
+            if (RunWords.Finished(status) && config.RunInHand == id.ToString()) SetRunInHand(null);
+        };
         vendors.WarmUp();
         InGame.WarmUpNames();
         BoardListings.Hook();
@@ -90,6 +98,7 @@ public sealed class LedgerSession : IDisposable
                 Left = engine.Left(),
                 HeldForYou = engine.HeldForYou,
                 CopyText = engine.CopyText,
+                SentAt = sentAt.TryGetValue(file.Guid, out var sent) ? sent : null,
             };
             return current;
         }
@@ -112,7 +121,17 @@ public sealed class LedgerSession : IDisposable
     // ---------------------------------------------------------------------------------------------
     // What the windows do.
 
-    /// <summary>Starts a run from the inbox; a run in hand is stopped first (the window asks you before).</summary>
+    /// <summary>When each run started here was sent from the site (for the window).</summary>
+    private readonly Dictionary<Guid, DateTime> sentAt = new();
+
+    /// <summary>The run being taken from the site (Start pressed, the site not answered yet), or null.</summary>
+    public Guid? Starting { get; private set; }
+
+    /// <summary>
+    /// Starts a run from the inbox. Everything that would stop it is checked first, then the site is asked
+    /// for it (<see cref="SiteSync.Claim"/>: one plugin takes a run once, and not one stopped there); only when
+    /// it says yes is a run in hand stopped (the window asks you before) and this one begun.
+    /// </summary>
     public void Start(Guid runId)
     {
         var waiting = sync.Waiting.FirstOrDefault(w => w.Id == runId);
@@ -121,17 +140,76 @@ public sealed class LedgerSession : IDisposable
             Notify("That run isn't in the inbox any more.");
             return;
         }
-        if (engine.Active) engine.Stop($"Put aside for \"{waiting.Name}\".");
-        if (engine.CanStart(waiting.File) is { } why)
+        if (Starting != null)
+        {
+            Notify("Another run is being taken from the site: a moment.");
+            return;
+        }
+        if (engine.CanStart(waiting.File, overRunInHand: true) is { } why)
         {
             Notify($"\"{waiting.Name}\" can't start: {why}");
             return;
         }
-        Notice = null;
-        later.Remove(runId);
-        engine.Start(waiting.File);
-        sync.RunChanged();
+        var (file, name, sent) = (waiting.File, waiting.Name, waiting.SentAt);
+        Starting = runId;
+        Notice = $"Taking \"{name}\" from the site…";
         Changed?.Invoke();
+        sync.Claim(file, r =>
+        {
+            Starting = null;
+            if (!r.Ok)
+            {
+                Notify($"\"{name}\" can't start: {r.Why ?? "the site didn't take it."}");
+                sync.RunChanged();
+                return;
+            }
+            Notice = null;
+            later.Remove(runId);
+            sentAt[runId] = sent;
+            // Asked a moment ago: something may have come up meanwhile (combat, say). Then it's in hand, paused.
+            var now = engine.CanStart(file, overRunInHand: true);
+            engine.Start(file, now == null ? null : $"It couldn't start yet: {now} Resume when it can.");
+            SetRunInHand(file.Id);
+            sync.RunChanged();
+            Changed?.Invoke();
+        });
+    }
+
+    private void SetRunInHand(string? id)
+    {
+        var value = id ?? string.Empty;
+        if (config.RunInHand == value) return;
+        config.RunInHand = value;
+        config.Save();
+    }
+
+    /// <summary>
+    /// The first inbox after loading: the run this plugin had in hand (its id kept in the settings), if the
+    /// site still has it going, is picked up again, paused; one the site can't hand back is said to be stopped.
+    /// Runs taken by another install are left alone.
+    /// </summary>
+    private void PickUp(IReadOnlyList<ActiveRun> active)
+    {
+        if (engine.Active || config.RunInHand.Length == 0 || !Guid.TryParse(config.RunInHand, out var mine)) return;
+        if (active.FirstOrDefault(a => a.Id == mine) is not { } run)
+        {
+            // Finished, or gone, on the site: nothing to pick up.
+            SetRunInHand(null);
+            return;
+        }
+        if (run.File is { } file && file.Guid == mine)
+        {
+            engine.Adopt(file, run.Progress);
+            sync.RunChanged();
+            Changed?.Invoke();
+            return;
+        }
+        // The site didn't send the run itself: it can't be carried on, so the site hears it's stopped.
+        var message = "Stopped: the plugin was reloaded and couldn't pick the run up again. Send it again from the site to carry on.";
+        JsonObject? progress = null;
+        if (run.Progress is { } p) progress = (p with { Status = RunStatus.Stopped, Message = message, UpdatedAt = DateTime.UtcNow }).ToJson();
+        sync.QueueFinal(mine, mine.ToString(), RunStatus.Stopped, progress);
+        SetRunInHand(null);
     }
 
     public void Pause() => engine.Pause("Paused by you.");
@@ -209,12 +287,9 @@ public sealed class LedgerSession : IDisposable
     /// <summary>Reads the settings again: a changed token links afresh (and the inbox is asked at once).</summary>
     public void Refresh()
     {
-        if (config.Token != lastToken)
-        {
-            lastToken = config.Token;
-            sync.Relinked();
-        }
-        else sync.RunChanged();
+        // Linked again (even with the same token: a link the site turned down is tried afresh).
+        lastToken = config.Token;
+        sync.Relinked();
         Changed?.Invoke();
     }
 
@@ -224,16 +299,46 @@ public sealed class LedgerSession : IDisposable
     private int engineSeen = -1;
     private int syncSeen = -1;
 
+    private RunStatus lastStatus;
+
     public void Tick()
     {
-        engine.Tick();
-        sync.Tick();
+        Safely(engine.Tick, "Market Ledger's run failed");
+        Safely(sync.Tick, "Market Ledger couldn't keep in step with the site");
+        Safely(StartLater, "Market Ledger couldn't start the next run");
         if (DateTime.UtcNow - helpersAt > TimeSpan.FromSeconds(30) && !engine.Active) CheckHelpers();
         if (engine.Version != engineSeen || sync.Version != syncSeen)
         {
             engineSeen = engine.Version;
             syncSeen = sync.Version;
             Changed?.Invoke();
+        }
+    }
+
+    /// <summary>A run just finished (done): the one you said "after this run" to starts (the site asked first).</summary>
+    private void StartLater()
+    {
+        var status = engine.File != null ? engine.Status : RunStatus.Accepted;
+        var justDone = status == RunStatus.Done && lastStatus != RunStatus.Done;
+        lastStatus = status;
+        if (!justDone || Starting != null) return;
+        if (RunPickup.NextLater(sync.Waiting.Select(w => w.Id), later) is { } next)
+        {
+            var name = sync.Waiting.First(w => w.Id == next).Name;
+            engine.Say(HelperNames.Ledger, $"Next: \"{name}\", as you asked.");
+            Start(next);
+        }
+    }
+
+    private static void Safely(Action a, string what)
+    {
+        try
+        {
+            a();
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Error(ex, what);
         }
     }
 
@@ -258,9 +363,16 @@ public sealed class LedgerSession : IDisposable
 
     public void Dispose()
     {
-        Services.Chat.ChatMessage -= OnChat;
-        engine.Dispose();
-        BoardListings.Unhook();
-        sync.Dispose();
+        Safely(() => Services.Chat.ChatMessage -= OnChat, "Market Ledger couldn't stop listening to chat");
+        // A run in hand is left paused ("The plugin was unloaded."), and the site hears so (2 s at most): it's
+        // picked up again when the plugin loads.
+        Safely(() =>
+        {
+            if (engine.Unload() is { } last) sync.QueueFinal(last.File, last.Progress);
+            sync.FlushOnUnload(TimeSpan.FromSeconds(2));
+        }, "Market Ledger couldn't pause the run while unloading");
+        Safely(engine.Dispose, "Market Ledger couldn't let go of the run's helpers");
+        Safely(BoardListings.Unhook, "Market Ledger couldn't stop listening to the market board");
+        Safely(sync.Dispose, "Market Ledger couldn't close its link to the site");
     }
 }

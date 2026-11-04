@@ -98,23 +98,44 @@ public static class Txt
     public static float SpacedWidth(string text, Face face, int px, float em) =>
         Spaced(default, Vector2.Zero, text, face, px, Vector4.Zero, em, draw: false);
 
-    /// <summary>The text cut to fit a width, with an ellipsis.</summary>
+    private static readonly Dictionary<(string Text, int Width, Face Face, int Px), string> Cut = new();
+    private static int cutFor = -1;
+
+    /// <summary>
+    /// The text cut to fit a width, with an ellipsis. What's cut is kept (by text, width, face and
+    /// size), so a long name in a narrow row isn't cut again, string by string, every frame.
+    /// </summary>
     public static string Fit(string text, Face face, int px, float width)
     {
         using (Fonts.Push(face, px))
         {
             if (ImGui.CalcTextSize(text).X <= width) return text;
-            const string dots = "…";
-            var lo = 0;
-            var hi = text.Length;
-            while (lo < hi)
+            if (!Fonts.Ready) return Shorten(text, width);
+            if (cutFor != Fonts.Generation)
             {
-                var mid = (lo + hi + 1) / 2;
-                if (ImGui.CalcTextSize(text[..mid].TrimEnd() + dots).X <= width) lo = mid;
-                else hi = mid - 1;
+                cutFor = Fonts.Generation;
+                Cut.Clear();
             }
-            return lo == 0 ? dots : text[..lo].TrimEnd() + dots;
+            var key = (text, (int)MathF.Floor(width), face, px);
+            if (Cut.TryGetValue(key, out var cut)) return cut;
+            if (Cut.Count > 400) Cut.Clear();
+            return Cut[key] = Shorten(text, width);
         }
+    }
+
+    /// <summary>The longest start of the text that fits with "…" after it (the font already pushed).</summary>
+    private static string Shorten(string text, float width)
+    {
+        const string dots = "…";
+        var lo = 0;
+        var hi = text.Length;
+        while (lo < hi)
+        {
+            var mid = (lo + hi + 1) / 2;
+            if (ImGui.CalcTextSize(text[..mid].TrimEnd() + dots).X <= width) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo == 0 ? dots : text[..lo].TrimEnd() + dots;
     }
 
     private readonly record struct Token(string Text, int Run, float Width, float Trailing);
@@ -229,7 +250,7 @@ public static class Txt
                         var min = new Vector2(lx, y);
                         var max = new Vector2(lx + tok.Width + (t < b - 1 && runs[tokens[t + 1].Run].Link == run.Link ? tok.Trailing : 0), y + box);
                         ImGui.SetCursorScreenPos(min);
-                        var hit = ImGui.InvisibleButton($"##link{run.Link}{linkIndex++}", Vector2.Max(max - min, new Vector2(1)));
+                        var hit = ImGui.InvisibleButton(Ids.Of(LinkPrefix(run.Link), linkIndex++), Vector2.Max(max - min, new Vector2(1)));
                         if (hit && !Kit.Blocked) clicked = run.Link;
                         if (ImGui.IsItemHovered() && !Kit.Blocked) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
                         if (run.Link == hoveredLink) color = Palette.Ink;
@@ -242,6 +263,16 @@ public static class Txt
         }
         ImGui.SetCursorScreenPos(cursor);
         return lines.Count * box;
+    }
+
+    private static readonly Dictionary<string, string> LinkPrefixes = new();
+
+    /// <summary>"##link" and the link, made once per link rather than each frame.</summary>
+    private static string LinkPrefix(string link)
+    {
+        if (LinkPrefixes.TryGetValue(link, out var p)) return p;
+        if (LinkPrefixes.Count > 64) LinkPrefixes.Clear();
+        return LinkPrefixes[link] = "##link" + link;
     }
 
     /// <summary>A paragraph at the cursor across the box's width; the cursor moves below it.</summary>

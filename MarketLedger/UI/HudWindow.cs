@@ -35,7 +35,14 @@ public sealed class HudWindow : Window, IDisposable
     private readonly Memo<long> countText = new();
     private readonly Memo<(long Spent, long Max)> spentText = new();
     private readonly Dictionary<Guid, string> promptLines = new();
+    private IReadOnlyList<WaitingRun>? promptLinesFor;
     private bool disposed;
+
+    /// <summary>The run whose Start now was pressed while another is in hand: the HUD asks before stopping that one.</summary>
+    private Guid? confirmStart;
+
+    /// <summary>Until when "Copy the list" says it's copied.</summary>
+    private DateTime copiedUntil;
 
     public HudWindow(LedgerSession session, Configuration config)
         : base("Market Ledger HUD###MarketLedgerHud", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar
@@ -77,7 +84,41 @@ public sealed class HudWindow : Window, IDisposable
 
     private static bool InHand(RunState? run) => run != null && Ui.Going(run.Status);
 
-    public override void PreOpenCheck() => IsOpen = config.ShowHud && (InHand(session.Current) || Prompt() != null);
+    public override void PreOpenCheck()
+    {
+        var run = session.Current;
+        ObserveEnd(run);
+        IsOpen = config.ShowHud && (InHand(run) || Prompt() != null || Ended() != null);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // A run that has just ended: the HUD says so (and why, when it was stopped or failed, by you, the
+    // site, or the run deleted there) for a while, rather than vanishing with it.
+
+    private sealed record EndedRun(string Id, string Name, RunStatus Status, string? Message);
+
+    private static readonly TimeSpan EndedShown = TimeSpan.FromSeconds(30);
+    private EndedRun? ended;
+    private DateTime endedUntil;
+    private string? seenId;
+    private bool seenGoing;
+
+    /// <summary>Notices a run in hand ending (watched each frame, the HUD open or not).</summary>
+    private void ObserveEnd(RunState? run)
+    {
+        var id = run?.File.Id;
+        var going = InHand(run);
+        if (run != null && id == seenId && seenGoing && !going)
+        {
+            ended = new EndedRun(run.File.Id, run.File.Name, run.Status, run.Message);
+            endedUntil = DateTime.UtcNow + EndedShown;
+        }
+        if (going) ended = null;
+        seenId = id;
+        seenGoing = going;
+    }
+
+    private EndedRun? Ended() => ended != null && DateTime.UtcNow < endedUntil ? ended : null;
 
     private int colors;
     private int vars;
@@ -118,10 +159,15 @@ public sealed class HudWindow : Window, IDisposable
                 var run = session.Current;
                 var prompt = Prompt();
                 if (InHand(run)) DrawRun(run!);
+                else if (Ended() is { } justEnded)
+                {
+                    DrawEnded(justEnded);
+                    if (prompt != null) Kit.Gap(12);
+                }
                 if (prompt != null)
                 {
                     if (InHand(run)) Kit.Gap(12);
-                    DrawPrompt(prompt, InHand(run));
+                    DrawPrompt(prompt, InHand(run), run);
                 }
                 Kit.Gap(Pad);
             }
@@ -221,9 +267,13 @@ public sealed class HudWindow : Window, IDisposable
             Kit.Gap(8);
             var c = Kit.At;
             var copy = run.CopyText;
-            if (Kit.Button("##hud-copy", c, "Copy the list", Btn.Glass, BtnSize.Tiny, Icon.Clipboard, w, false,
+            var copied = DateTime.UtcNow < copiedUntil;
+            if (Kit.Button("##hud-copy", c, copied ? "Copied" : "Copy the list", Btn.Glass, BtnSize.Tiny, copied ? Icon.Check : Icon.Clipboard, w, false,
                     "Copies what this step needs you to paste (GatherBuddy Reborn: its Auto-Gather tab, Import from TeamCraft)"))
+            {
                 ImGui.SetClipboardText(copy);
+                copiedUntil = DateTime.UtcNow + TimeSpan.FromSeconds(1.5);
+            }
             Kit.Reserve(c, w, Kit.ButtonHeight(BtnSize.Tiny));
         }
         if (run.HeldForYou)
@@ -234,6 +284,39 @@ public sealed class HudWindow : Window, IDisposable
                     "Lets the step it's holding go ahead"))
                 later.Add(session.Resume);
             Kit.Reserve(b, w, Kit.ButtonHeight(BtnSize.Sm));
+        }
+    }
+
+    /// <summary>"Stopped · Gemdraughts for the weekend", why under it, and the way to the window; × puts it away.</summary>
+    private void DrawEnded(EndedRun end)
+    {
+        var at = Kit.At;
+        var w = Kit.Width;
+        var dl = Kit.Dl;
+        var rowH = S(28);
+        var done = end.Status == RunStatus.Done;
+        var tint = done ? Palette.Gain : Palette.Danger;
+        var tile = S(22);
+        dl.AddRectFilled(new Vector2(at.X, at.Y + (rowH - tile) / 2), new Vector2(at.X + tile, at.Y + (rowH + tile) / 2),
+            Palette.U32(done ? Palette.SuccessWash : Palette.DangerWash), S(6));
+        Icons.Draw(dl, done ? Icon.Check : Icon.AlertTriangle, new Vector2(at.X + S(4), at.Y + (rowH - S(14)) / 2), S(14), tint);
+        var bx = at.X + w - rowH;
+        if (Kit.IconButton("##hud-ended-close", new Vector2(bx, at.Y), Icon.X, "Put this away", 28, Btn.Quiet)) ended = null;
+        bx -= rowH + S(4);
+        if (Kit.IconButton("##hud-ended-open", new Vector2(bx, at.Y), Icon.ExternalLink, "Open the run window", 28, Btn.Quiet))
+        {
+            if (OpenMain != null) later.Add(OpenMain);
+            else Dalamud.Utility.Util.OpenLink(Ui.RunUrl(end.Id));
+        }
+        var x = at.X + tile + S(8);
+        x += Txt.Line(dl, new Vector2(x, at.Y), Ui.StatusWord(end.Status), Face.SansSemibold, 14, tint, 28);
+        x += Txt.Line(dl, new Vector2(x, at.Y), " · ", Face.Sans, 13, Palette.Faint, 28);
+        Txt.Line(dl, new Vector2(x, at.Y), Txt.Fit(end.Name, Face.SansSemibold, 14, MathF.Max(S(20), bx - S(10) - x)), Face.SansSemibold, 14, Palette.Ink, 28);
+        Kit.Reserve(at, w, rowH);
+        if (!string.IsNullOrEmpty(end.Message))
+        {
+            Kit.Gap(6);
+            Lines.Para(end.Message, done ? Palette.Soft : Palette.Danger, 12, 18);
         }
     }
 
@@ -312,8 +395,10 @@ public sealed class HudWindow : Window, IDisposable
     // ---------------------------------------------------------------------------------------------
     // A run from the site.
 
-    private void DrawPrompt(WaitingRun run, bool inHand)
+    private void DrawPrompt(WaitingRun run, bool inHand, RunState? current)
     {
+        // The question was about another run, or nothing is in hand any more: it's asked afresh.
+        if (confirmStart is { } asked && (asked != run.Id || !inHand)) confirmStart = null;
         if (inHand)
         {
             var line = Kit.At;
@@ -335,14 +420,23 @@ public sealed class HudWindow : Window, IDisposable
 
         var row = Kit.At;
         var h = Kit.ButtonHeight(BtnSize.Tiny);
+        var id = run.Id;
+        if (confirmStart == id && current != null)
+        {
+            DrawStartOver(run, current, row, w, h);
+            return;
+        }
         const string start = "Start now";
         var second = inHand ? "After this run" : "Not now";
         var sw = Kit.ButtonWidth(start, BtnSize.Tiny, Icon.Play, Btn.Primary);
         var lw = Kit.ButtonWidth(second, BtnSize.Tiny);
-        var id = run.Id;
         if (Kit.Button("##hud-start", new Vector2(row.X + w - sw, row.Y), start, Btn.Primary, BtnSize.Tiny, Icon.Play, 0, false,
-                inHand ? "The run in hand stops where it is (the site keeps its progress) and this one starts" : null))
-            later.Add(() => session.Start(id));
+                inHand ? "Asks first: the run in hand would be stopped where it is (the site is told)" : null))
+        {
+            // Over a run in hand it asks first, as the main window does; otherwise it starts.
+            if (inHand) confirmStart = id;
+            else later.Add(() => session.Start(id));
+        }
         if (Kit.Button("##hud-later", new Vector2(row.X + w - sw - S(8) - lw, row.Y), second, Btn.Glass, BtnSize.Tiny, null, 0, false,
                 inHand ? "Starts by itself once the run in hand is done" : "It waits on Home in the main window"))
         {
@@ -352,9 +446,39 @@ public sealed class HudWindow : Window, IDisposable
         Kit.Reserve(row, w, h);
     }
 
+    /// <summary>Start now pressed over a run in hand: "Stop "…" and start this one?" with Keep going and Stop and start.</summary>
+    private void DrawStartOver(WaitingRun run, RunState current, Vector2 row, float w, float h)
+    {
+        var line = stopLine.Get(current.File.Id, current.File.Name, static (_, name) => $"\"{name}\" is stopped where it is (the site is told), and this one starts.");
+        Lines.Para(line, Palette.GoldText, 12, 18);
+        Kit.Gap(8);
+        row = Kit.At;
+        const string yes = "Stop it and start";
+        const string no = "Keep going";
+        var yw = Kit.ButtonWidth(yes, BtnSize.Tiny, Icon.Play, Btn.Danger);
+        var nw = Kit.ButtonWidth(no, BtnSize.Tiny);
+        var id = run.Id;
+        if (Kit.Button("##hud-start-yes", new Vector2(row.X + w - yw, row.Y), yes, Btn.Danger, BtnSize.Tiny, Icon.Play))
+        {
+            confirmStart = null;
+            later.Add(() => session.Start(id));
+        }
+        if (Kit.Button("##hud-start-no", new Vector2(row.X + w - yw - S(8) - nw, row.Y), no, Btn.Glass, BtnSize.Tiny))
+            confirmStart = null;
+        Kit.Reserve(row, w, h);
+    }
+
+    private readonly Memo<string> stopLine = new();
+
     /// <summary>"Gemdraughts for the weekend · about 40 min · up to 120,000 gil", once per run.</summary>
     private string PromptLine(WaitingRun run)
     {
+        // A new list from the site: the lines made for the old one go.
+        if (!ReferenceEquals(session.Inbox, promptLinesFor))
+        {
+            promptLinesFor = session.Inbox;
+            promptLines.Clear();
+        }
         if (promptLines.TryGetValue(run.Id, out var line)) return line;
         if (promptLines.Count > 32) promptLines.Clear();
         var max = (long)run.File.MaxGil;

@@ -17,8 +17,19 @@ public static class Lines
     private static readonly Dictionary<(string Text, int Width, Face Face, int Px), string[]> Cache = new();
 
     /// <summary>The lines of <paramref name="text"/> in <paramref name="width"/> screen pixels.</summary>
+    private static int cachedFor = -1;
+
     public static string[] Of(string text, float width, Face face, int px)
     {
+        // Until the faces are built a push gives Dalamud's default font: lines broken with it aren't
+        // kept (they'd stay broken at the wrong places), and a rebuild throws away what was kept.
+        var fonts = Txt.Fonts;
+        if (!fonts.Ready) return Break(text, width, face, px);
+        if (cachedFor != fonts.Generation)
+        {
+            cachedFor = fonts.Generation;
+            Cache.Clear();
+        }
         var key = (text, (int)MathF.Floor(width), face, px);
         if (Cache.TryGetValue(key, out var lines)) return lines;
         // Old widths and texts pile up as the window is resized and the log moves on.

@@ -30,7 +30,7 @@ public sealed partial class MainWindow
         var dl = Kit.Dl;
         var titleH = Lines.Draw(dl, at, tw, "Market Ledger plans and keeps order. Other plugins do the work.", Face.SansSemibold, 14, Palette.Ink, 20);
         var lineH = Lines.Draw(dl, new Vector2(at.X, at.Y + titleH + S(4)), tw,
-            "It doesn't craft, gather or walk by itself: it asks the plugin that already does that well, waits for it, and checks the count in your bags. Buying it does itself, as Housing Studio does, never past the gil you agreed to on the site.",
+            "It doesn't craft, gather or walk by itself: it asks the plugin that already does that well, waits for it, and checks the count in your bags. Buying it does itself, at or under each line's price and never past the gil you agreed to on the site.",
             Face.Sans, 12, Palette.Muted, 18);
         var h = titleH + S(4) + lineH;
         if (Kit.Button("##helpers-again", new Vector2(at.X + w - bw, at.Y + MathF.Max(0, (h - Kit.ButtonHeight(BtnSize.Tiny)) / 2)), again, Btn.Glass,

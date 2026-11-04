@@ -252,7 +252,7 @@ public static partial class Kit
         var size = new Vector2(S(44), S(24));
         var (clicked, hovered, _) = Hit(id, pos, size, disabled);
         var storage = ImGui.GetStateStorage();
-        var key = ImGui.GetID(id + "##knob");
+        var key = ImGui.GetID(KnobId(id));
         var target = on ? 1f : 0f;
         var t = storage.GetFloat(key, target);
         // The site's 160ms.
@@ -274,6 +274,16 @@ public static partial class Kit
         Palette.Opacity = old;
         FocusRing(pos, max, r);
         return clicked;
+    }
+
+    private static readonly Dictionary<string, string> KnobIds = new();
+
+    /// <summary>The id the switch keeps its knob's place under, made once per switch rather than every frame.</summary>
+    private static string KnobId(string id)
+    {
+        if (KnobIds.TryGetValue(id, out var k)) return k;
+        if (KnobIds.Count > 256) KnobIds.Clear();
+        return KnobIds[id] = id + "##knob";
     }
 
     private static float MoveTowards(float v, float target, float step) =>
@@ -334,7 +344,7 @@ public static partial class Kit
             var size = new Vector2(w, S(28));
             var on = i == selected;
             var disabled = (disabledMask & (1 << i)) != 0;
-            var (clicked, hovered, _) = Hit($"{id}{i}", p, size, disabled);
+            var (clicked, hovered, _) = Hit(Ids.Of(id, i), p, size, disabled);
             if (clicked) result = i;
             if (tips != null && i < tips.Count && tips[i] is { } tip && !Blocked && ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(p, p + size))
                 Tooltip(tip);
@@ -457,10 +467,15 @@ public static partial class Kit
         var w = h * 2 + valueW;
         dl.AddRect(pos + new Vector2(0.5f), pos + new Vector2(w, h) - new Vector2(0.5f), Palette.U32(Palette.LineStrong), h / 2, ImDrawFlags.None, 1f);
         var result = 0;
-        foreach (var (dir, x, icon, can) in new[] { (-1, pos.X, Icon.Minus, canDown), (1, pos.X + h + valueW, Icon.Plus, canUp) })
+        // The two ends, without making an array or ids each frame.
+        for (var end = 0; end < 2; end++)
         {
+            var dir = end == 0 ? -1 : 1;
+            var x = end == 0 ? pos.X : pos.X + h + valueW;
+            var icon = end == 0 ? Icon.Minus : Icon.Plus;
+            var can = end == 0 ? canDown : canUp;
             var p = new Vector2(x, pos.Y);
-            var (clicked, hovered, held) = Hit($"{id}{dir}", p, new Vector2(h), !can);
+            var (clicked, hovered, held) = Hit(Ids.Of(id, dir), p, new Vector2(h), !can);
             if (clicked) result = dir;
             var old = Palette.Opacity;
             if (!can) Palette.Opacity = old * 0.4f;

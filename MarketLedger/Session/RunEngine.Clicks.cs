@@ -390,7 +390,9 @@ public sealed partial class RunEngine
             Step.Act($"Go to {world} (Lifestream)", () =>
             {
                 if (InGame.CurrentWorld() == world) return StepOutcome.Done;
-                if (Travel.CanVisit(world) == false) return StepOutcome.Halt($"Lifestream says {world} can't be visited from here.");
+                // Only a world on this data centre: Lifestream's world change would cross to another data
+                // centre too, which a run never asks for (and one it can't say about isn't gone to).
+                if (Travel.CanVisit(world) != true) return StepOutcome.Halt($"Lifestream doesn't say {world} is on your data centre: not visited.");
                 travelling = true;
                 lastTry = DateTime.UtcNow;
                 Doing = $"Visiting {world} · {HelperNames.Lifestream}";
@@ -402,7 +404,7 @@ public sealed partial class RunEngine
                 Label = $"Arrive on {world}",
                 Run = () =>
                 {
-                    if (InGame.CurrentWorld() != world && Again(ref lastTry, ref asks, () => Travel.ChangeWorld(world), 25) is { } stop) return stop;
+                    if (InGame.CurrentWorld() != world && Again(ref lastTry, ref asks, () => Travel.CanVisit(world) == true && Travel.ChangeWorld(world), 25) is { } stop) return stop;
                     if (InGame.CurrentWorld() != world || !InGame.Settled || Travel.Busy) return StepOutcome.Waiting;
                     Arrived();
                     return StepOutcome.Done;
@@ -642,12 +644,21 @@ public sealed partial class RunEngine
         };
     }
 
-    /// <summary>Answers the game's yes (a purchase checked before).</summary>
+    /// <summary>Answers the game's yes (a purchase checked before), only while it's still that question.</summary>
     private static Step Yes(string question) => new()
     {
         Label = $"Answer yes to \"{question}\"",
         IsAction = true,
-        Run = () => GameUi.Fire(UiTable.YesNoYes) ? StepOutcome.Done : StepOutcome.Halt("The yes/no closed."),
+        Run = () =>
+        {
+            // A moment has gone by since it was checked (the gap between clicks): the window may be another's now.
+            if (GameUi.YesNoText() != question)
+            {
+                GameUi.Close(UiTable.YesNo);
+                return StepOutcome.Halt("The question changed before it was answered: said no.");
+            }
+            return GameUi.Fire(UiTable.YesNoYes) ? StepOutcome.Done : StepOutcome.Halt("The yes/no closed.");
+        },
     };
 
     /// <summary>The part has nothing left to do: its remaining steps are passed.</summary>

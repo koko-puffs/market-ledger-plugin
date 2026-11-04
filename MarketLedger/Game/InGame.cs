@@ -27,11 +27,18 @@ public readonly record struct MarketCity(uint AetheryteTerritory, string Name, u
 /// </summary>
 public static unsafe class InGame
 {
+    /// <summary>
+    /// A retainer's seven bag pages and its crystals: where a withdraw line's item is looked for. (A crystal's
+    /// "Retrieve from Retainer" may ask how many: the run then pauses for you to take them by hand.)
+    /// </summary>
     public static readonly InventoryType[] RetainerPages =
     {
         InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3, InventoryType.RetainerPage4,
-        InventoryType.RetainerPage5, InventoryType.RetainerPage6, InventoryType.RetainerPage7,
+        InventoryType.RetainerPage5, InventoryType.RetainerPage6, InventoryType.RetainerPage7, InventoryType.RetainerCrystals,
     };
+
+    /// <summary>Shards, crystals and clusters (items 2–19): they go to the crystal bag, taking no bag slot.</summary>
+    public static bool IsCrystal(uint itemId) => itemId is >= 2 and <= 19;
 
     /// <summary>Limsa Lominsa Lower Decks: its aetheryte stands above Hawkers' Alley, where the market boards and summoning bells are.</summary>
     public const uint HubTerritory = 129;
@@ -76,7 +83,22 @@ public static unsafe class InGame
     {
         var mgr = InventoryManager.Instance();
         if (mgr == null) return 0;
+        // Crystals live in their own bag: counted there (as the site counts a line's need, the crystal bag with the bags).
+        if (IsCrystal(itemId)) return CrystalCount(mgr, itemId);
         return mgr->GetInventoryItemCount(itemId, false, false, false, 0) + mgr->GetInventoryItemCount(itemId, true, false, false, 0);
+    }
+
+    private static int CrystalCount(InventoryManager* mgr, uint itemId)
+    {
+        var c = mgr->GetInventoryContainer(InventoryType.Crystals);
+        if (c == null || !c->IsLoaded) return 0;
+        var n = 0;
+        for (var i = 0; i < c->Size; i++)
+        {
+            var item = c->GetInventorySlot(i);
+            if (item != null && !item->IsEmpty() && item->GetBaseItemId() == itemId) n += (int)item->GetQuantity();
+        }
+        return n;
     }
 
     /// <summary>How many normal-quality copies of an item your bags hold: what a bought one stacks onto.</summary>

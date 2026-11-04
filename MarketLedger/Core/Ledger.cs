@@ -59,6 +59,45 @@ public static class Holdings
         }
         return counts;
     }
+
+    /// <summary>
+    /// A retainer's counts from Allagan Tools' <c>GetCharacterItems</c>: each slot is CriticalCommonLib's
+    /// <c>InventoryItem.ToNumeric()</c>, [0] its container (CriticalCommonLib's InventoryType), [1] its slot,
+    /// [2] the item id, [3] the quantity. Only what can be withdrawn at a bell counts: the retainer's seven
+    /// bag pages (10000–10006) and its crystals (12001), not what it's selling (12002), wearing (11000) or
+    /// its gil (12000).
+    /// </summary>
+    public static Dictionary<uint, int> FromAllagan(IEnumerable<ulong[]> slots) =>
+        Count(slots.Where(a => a is { Length: >= 4 } && a[0] is (>= 10000 and <= 10006) or 12001)
+            .Select(a => ((uint)Math.Min(a[2], uint.MaxValue), (long)Math.Min(a[3], (ulong)long.MaxValue))));
+
+    /// <summary>
+    /// Retainers' names by id from AutoRetainer's <c>GetOfflineCharacterData</c>, as Dalamud hands it to a
+    /// plugin that can't name its type: written out as JSON (its <c>RetainerData</c> [{ <c>Name</c>,
+    /// <c>RetainerID</c> }]). Anything unreadable is left out.
+    /// </summary>
+    public static Dictionary<ulong, string> RetainerNamesFromJson(string? json)
+    {
+        var names = new Dictionary<ulong, string>();
+        if (string.IsNullOrWhiteSpace(json)) return names;
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(json);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return names;
+        }
+        if (node is not JsonObject o || o["RetainerData"] is not JsonArray list) return names;
+        foreach (var r in list)
+        {
+            if (r is not JsonObject ro || ro["RetainerID"] is not JsonValue idv || JsonRead.Str(ro, "Name") is not { Length: > 0 } name) continue;
+            ulong id = idv.TryGetValue<ulong>(out var u) ? u : idv.TryGetValue<long>(out var l) && l > 0 ? (ulong)l : 0;
+            if (id != 0) names[id] = name;
+        }
+        return names;
+    }
 }
 
 /// <summary>A sale a retainer made, as the site takes it (<c>ml_plugin_sales</c>).</summary>

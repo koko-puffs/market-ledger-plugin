@@ -109,7 +109,7 @@ public static partial class Kit
             var w = TabWidth(tab);
             var p = new Vector2(x, at.Y + S(4));
             var max = p + new Vector2(w, inner);
-            var (clicked, hovered, held) = Hit($"{id}{i}", p, new Vector2(w, inner));
+            var (clicked, hovered, held) = Hit(Ids.Of(id, i), p, new Vector2(w, inner));
             if (clicked) result = i;
             var on = i == selected;
             if (on) dl.AddRectFilled(p, max, Palette.U32(Palette.Picked), inner / 2);

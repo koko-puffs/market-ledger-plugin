@@ -7,16 +7,16 @@ using Dalamud.Plugin.Ipc;
 namespace MarketLedger.Ipc;
 
 /// <summary>
-/// Allagan Tools (Critical-Impact/InventoryTools), through its IPC: what your retainers hold, as it last
-/// saw (it keeps them between sessions), so the site knows without you opening each. Every call is
-/// wrapped: missing, not ready or failing just means nothing from it. Framework thread.
+/// Allagan Tools (Critical-Impact/InventoryTools, internal name InventoryTools), through its IPC: what your
+/// retainers hold, without opening each. Every call is wrapped (<see cref="IpcGuard"/>). Framework thread.
 /// </summary>
 /// <remarks>
-/// Verified in its source (<c>InventoryTools/IPC/IPCService.cs</c>, commit 70a9f41, 13 Sep 2026):
+/// Verified in its source (<c>InventoryTools/IPC/IPCService.cs</c>, commit 70a9f41):
 /// <c>AllaganTools.IsInitialized</c> → bool (line 592), <c>AllaganTools.GetCharactersOwnedByActive</c>
-/// (bool includeOwner) → HashSet&lt;ulong&gt; (the active character's retainers' ids; line 574),
-/// <c>AllaganTools.GetCharacterItems</c> (ulong) → HashSet&lt;ulong[]&gt; (line 571), each array the item's
-/// numbers with its id first and its quantity second (as Housing Studio's plugin reads them).
+/// (bool includeOwner) → HashSet&lt;ulong&gt; (line 574: the active character's retainers, and itself when
+/// asked), <c>AllaganTools.GetCharacterItems</c> (ulong) → HashSet&lt;ulong[]&gt; (line 571: every item it
+/// knows that character holds, each as CriticalCommonLib's <c>InventoryItem.ToNumeric()</c>: [0] container,
+/// [1] slot, [2] item id, [3] quantity; read by <see cref="Holdings.FromAllagan"/>).
 /// </remarks>
 public sealed class AllaganTools
 {
@@ -41,18 +41,21 @@ public sealed class AllaganTools
 
     public string? Version => Plugins.Version(InternalName);
 
-    /// <summary>Each of the active character's retainers' counts (by retainer id), or none when it doesn't answer.</summary>
+    /// <summary>
+    /// What each of the active character's retainers holds in its bags and crystals (by the retainer's id),
+    /// as Allagan Tools last saw it. Empty when it isn't installed or ready.
+    /// </summary>
     public Dictionary<ulong, Dictionary<uint, int>> Retainers()
     {
         var result = new Dictionary<ulong, Dictionary<uint, int>>();
         if (!Installed || !guard.Call("IsInitialized", () => isInitialized.InvokeFunc(), false)) return result;
         var ids = guard.Call<HashSet<ulong>?>("GetCharactersOwnedByActive", () => ownedByActive.InvokeFunc(false), null);
         if (ids == null) return result;
-        foreach (var id in ids)
+        foreach (var id in ids.Take(64))
         {
             var items = guard.Call<HashSet<ulong[]>?>("GetCharacterItems", () => characterItems.InvokeFunc(id), null);
             if (items == null) continue;
-            var counts = Holdings.Count(items.Where(a => a is { Length: >= 2 }).Select(a => ((uint)Math.Min(a[0], uint.MaxValue), (long)Math.Min(a[1], long.MaxValue))));
+            var counts = Holdings.FromAllagan(items);
             if (counts.Count > 0) result[id] = counts;
         }
         return result;

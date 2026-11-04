@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Dalamud.Game;
 using Dalamud.Interface.ManagedFontAtlas;
 
@@ -25,7 +26,7 @@ public enum Face
 
 /// <summary>
 /// The faces at the sizes the window uses, loaded through Dalamud's font atlas (so they follow
-/// Dalamud's global scale and rebuild with it): Geist 15/14/13/12 (400), 15/14/13/12 (500), 30/22/18/15/14/13
+/// Dalamud's global scale and rebuild with it): Geist 14/13/12/11 (400), 14/13/12 (500), 30/22/18/15/14/13
 /// (600); Geist Mono 22/15/13/12/11 (every number: gil, counts, times). Under the SIL Open Font License 1.1, unmodified, with its licence
 /// (Resources/Fonts).
 ///
@@ -42,13 +43,19 @@ public sealed class Fonts : IDisposable
 
     private static readonly (Face Face, int Px)[] Wanted =
     {
-        (Face.Sans, 14), (Face.Sans, 13), (Face.Sans, 12),
+        (Face.Sans, 14), (Face.Sans, 13), (Face.Sans, 12), (Face.Sans, 11),
         (Face.SansMedium, 14), (Face.SansMedium, 13), (Face.SansMedium, 12),
         (Face.SansSemibold, 30), (Face.SansSemibold, 22), (Face.SansSemibold, 18), (Face.SansSemibold, 15), (Face.SansSemibold, 14), (Face.SansSemibold, 13),
         (Face.Mono, 22), (Face.Mono, 15), (Face.Mono, 13), (Face.Mono, 12), (Face.Mono, 11),
     };
 
     private readonly Dictionary<(Face, int), IFontHandle> handles = new();
+
+    /// <summary>Sizes asked for that aren't loaded, and the handle used instead (found once, not each frame).</summary>
+    private readonly Dictionary<(Face, int), IFontHandle> nearest = new();
+
+    private int generation;
+    private bool ready;
 
     public Fonts()
     {
@@ -65,7 +72,31 @@ public sealed class Fonts : IDisposable
             };
             var dalamudFont = japanese && face is not Face.Mono;
             // The mono only shows times and counts: it needs no other language's letters.
-            handles[(face, px)] = Make(atlas, file, px * GeistLine, dalamudFont, face is not Face.Mono);
+            var handle = Make(atlas, file, px * GeistLine, dalamudFont, face is not Face.Mono);
+            // Rebuilt (Dalamud's font settings, the scale): what was measured with the old one is stale.
+            // This can come from the font build's own thread, hence only a counter.
+            handle.ImFontChanged += OnFontChanged;
+            handles[(face, px)] = handle;
+        }
+    }
+
+    private void OnFontChanged(IFontHandle handle, ILockedImFont font) => Interlocked.Increment(ref generation);
+
+    /// <summary>Goes up whenever a face is built again: text measured before is to be measured again.</summary>
+    public int Generation => Volatile.Read(ref generation);
+
+    /// <summary>
+    /// Every face is built. Until then a push gives Dalamud's default font, so what's measured then
+    /// (wrapped lines, cut text) mustn't be kept.
+    /// </summary>
+    public bool Ready
+    {
+        get
+        {
+            if (ready) return true;
+            foreach (var h in handles.Values)
+                if (!h.Available) return false;
+            return ready = handles.Count > 0;
         }
     }
 
@@ -75,8 +106,9 @@ public sealed class Fonts : IDisposable
     public IFontHandle Handle(Face face, int px)
     {
         if (handles.TryGetValue((face, px), out var h)) return h;
+        if (nearest.TryGetValue((face, px), out h)) return h;
         var best = handles.Keys.Where(k => k.Item1 == face).OrderBy(k => Math.Abs(k.Item2 - px)).FirstOrDefault();
-        return handles.TryGetValue(best, out h) ? h : handles[(Face.Sans, 14)];
+        return nearest[(face, px)] = handles.TryGetValue(best, out h) ? h : handles[(Face.Sans, 14)];
     }
 
     private static IFontHandle Make(IFontAtlas atlas, string file, float sizePx, bool dalamudFont, bool languages) =>
@@ -108,7 +140,12 @@ public sealed class Fonts : IDisposable
 
     public void Dispose()
     {
-        foreach (var h in handles.Values) h.Dispose();
+        foreach (var h in handles.Values)
+        {
+            h.ImFontChanged -= OnFontChanged;
+            h.Dispose();
+        }
         handles.Clear();
+        nearest.Clear();
     }
 }

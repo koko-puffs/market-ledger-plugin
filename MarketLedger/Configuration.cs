@@ -45,5 +45,11 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Pauses, stops and the end of a run said in chat.</summary>
     public bool ChatMessages { get; set; } = true;
 
+    /// <summary>
+    /// The site's id of the run in hand (empty: none), kept so the plugin picks it up again after it's
+    /// reloaded (paused), and never takes up another install's.
+    /// </summary>
+    public string RunInHand { get; set; } = string.Empty;
+
     public void Save() => Services.PluginInterface.SavePluginConfig(this);
 }

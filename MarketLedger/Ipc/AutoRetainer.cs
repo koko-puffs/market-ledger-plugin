@@ -16,8 +16,9 @@ namespace MarketLedger.Ipc;
 /// <remarks>
 /// Verified in AutoRetainer's source (commit cc020df, 28 Aug 2026): <c>AutoRetainer.GetSuppressed</c> → bool
 /// and <c>AutoRetainer.SetSuppressed</c> (bool) (<c>AutoRetainer/Modules/IPC.cs</c>, lines 22–23),
-/// <c>AutoRetainer.GetOfflineCharacterData</c> (ulong) → its OfflineCharacterData (line 27; read by name:
-/// <c>RetainerData</c>, each <c>Name</c> and <c>RetainerID</c>), and <c>AutoRetainer.PluginState.IsBusy</c> → bool
+/// <c>AutoRetainer.GetOfflineCharacterData</c> (ulong) → its OfflineCharacterData (line 27; subscribed as
+/// object, which Dalamud's <c>CallGateChannel.ConvertObject</c> hands over as JSON (a Newtonsoft JObject):
+/// <c>RetainerData</c>, each <c>Name</c> and <c>RetainerID</c>, read by <see cref="Holdings.RetainerNamesFromJson"/>), and <c>AutoRetainer.PluginState.IsBusy</c> → bool
 /// (<c>AutoRetainer/Modules/EzIPCManagers/IPC_PluginState.cs</c>, line 15; Housing Studio's plugin asked
 /// "AutoRetainer.IsBusy", which isn't published).
 /// </remarks>
@@ -72,17 +73,35 @@ public sealed class AutoRetainer
     /// <summary>AutoRetainer is doing something; false when it doesn't answer.</summary>
     public bool Busy => guard.Call("PluginState.IsBusy", () => isBusy.InvokeFunc(), false);
 
-    /// <summary>Your retainers' names by id, as AutoRetainer keeps them for a character (empty when it doesn't say).</summary>
+    private (ulong ContentId, DateTime Until, Dictionary<ulong, string> Names) namesCache = (0, DateTime.MinValue, new());
+
+    /// <summary>
+    /// Your retainers' names by id, as AutoRetainer keeps them for a character (empty when it doesn't say);
+    /// asked at most every 5 minutes (Dalamud writes its whole character record out as JSON to hand it over).
+    /// </summary>
     public Dictionary<ulong, string> RetainerNames(ulong contentId)
     {
+        var now = DateTime.UtcNow;
+        if (namesCache.ContentId == contentId && now < namesCache.Until) return namesCache.Names;
         var names = new Dictionary<ulong, string>();
         guard.Do("GetOfflineCharacterData", () =>
         {
-            if (Read(characterData.InvokeFunc(contentId), "RetainerData") is IEnumerable retainers)
+            var data = characterData.InvokeFunc(contentId);
+            // Its type (AutoRetainerAPI's OfflineCharacterData) isn't this plugin's to name, so Dalamud converts
+            // it for an object subscriber: through JSON, to a Newtonsoft JObject, whose text is read here. Read
+            // by reflection too, should a Dalamud ever hand over the object itself.
+            if (Read(data, "RetainerData") is IEnumerable retainers and not string)
+            {
                 foreach (var r in retainers)
                     if (r != null && Read(r, "RetainerID") is ulong id && id != 0 && Read(r, "Name") is string { Length: > 0 } name)
                         names[id] = name;
+            }
+            else if (data != null)
+            {
+                foreach (var (id, name) in Holdings.RetainerNamesFromJson(data.ToString())) names[id] = name;
+            }
         });
+        namesCache = (contentId, now + TimeSpan.FromMinutes(5), names);
         return names;
     }
 

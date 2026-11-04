@@ -212,13 +212,19 @@ public sealed partial class MainWindow
             var l = log[i];
             var at = Kit.At;
             var w = Kit.Width;
-            var x = at.X;
-            Txt.Line(dl, new Vector2(x, at.Y), LogTime(l.At), Face.Mono, 12, Palette.Dim, 18);
-            x += timeW + S(8);
             var who = LogWho(l.Who);
-            x += Txt.Line(dl, new Vector2(x, at.Y), who, Face.Mono, 12, Ui.Tint(l.Who), 18) + S(8);
-            var h = Lines.Draw(dl, new Vector2(x, at.Y), MathF.Max(S(60), at.X + w - x), l.Text ?? string.Empty, Face.Mono, 12, Palette.Soft, 18);
-            Kit.Reserve(at, w, MathF.Max(S(18), h));
+            var textX = at.X + timeW + S(8) + Txt.Measure(who, Face.Mono, 12).X + S(8);
+            var textW = MathF.Max(S(60), at.X + w - textX);
+            var text = l.Text ?? string.Empty;
+            var h = MathF.Max(S(18), Lines.Height(text, textW, Face.Mono, 12, 18));
+            // Up to 200 lines: only those in the card's view are drawn, the rest only take their room.
+            if (ImGui.IsRectVisible(at, at + new Vector2(w, h)))
+            {
+                Txt.Line(dl, at, LogTime(l.At), Face.Mono, 12, Palette.Dim, 18);
+                Txt.Line(dl, new Vector2(at.X + timeW + S(8), at.Y), who, Face.Mono, 12, Ui.Tint(l.Who), 18);
+                Lines.Draw(dl, new Vector2(textX, at.Y), textW, text, Face.Mono, 12, Palette.Soft, 18);
+            }
+            Kit.Reserve(at, w, h);
             Kit.Gap(3);
         }
         Kit.EndScrollCard();
@@ -262,7 +268,7 @@ public sealed partial class MainWindow
         if (!string.IsNullOrEmpty(run.Message))
         {
             Kit.Gap(6);
-            Lines.Para(run.Message, MessageColor(run.Status), 12, 18);
+            RunMessage("##now-ended", run, 12, 18);
         }
         if (run.HeldForYou && Ui.Going(run.Status))
         {

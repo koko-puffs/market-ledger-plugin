@@ -137,6 +137,39 @@ public static class RunOrder
     }
 }
 
+/// <summary>A run picked up again (after the plugin loads) from the progress the site kept. Pure, so it's tested.</summary>
+public static class RunPickup
+{
+    /// <summary>
+    /// Each step's state and note as the progress had them (matched by the step's id): a step through, skipped
+    /// or failed stays so; any other starts again from your bags. The step it was on, kept within the run.
+    /// </summary>
+    public static (StepState[] States, string?[] Notes, int Step) Restore(RunFile file, RunProgress? progress)
+    {
+        var states = new StepState[file.Steps.Count];
+        var notes = new string?[file.Steps.Count];
+        var byId = new Dictionary<string, ProgressStep>(StringComparer.Ordinal);
+        foreach (var s in progress?.Steps ?? Array.Empty<ProgressStep>()) byId.TryAdd(s.Id, s);
+        for (var i = 0; i < file.Steps.Count; i++)
+        {
+            if (!byId.TryGetValue(file.Steps[i].Id, out var p)) continue;
+            states[i] = p.State is StepState.Done or StepState.Skipped or StepState.Failed ? p.State : StepState.Waiting;
+            notes[i] = p.Note;
+        }
+        var step = Math.Clamp(progress?.Step ?? 0, 0, Math.Max(0, file.Steps.Count - 1));
+        return (states, notes, step);
+    }
+
+    /// <summary>The run to start once the one in hand is done: the first you said "after this run" to that's still waiting.</summary>
+    public static Guid? NextLater(IEnumerable<Guid> waiting, IReadOnlyList<Guid> later)
+    {
+        var set = waiting.ToHashSet();
+        foreach (var id in later)
+            if (set.Contains(id)) return id;
+        return null;
+    }
+}
+
 /// <summary>A run's log: the newest lines first, at most <see cref="Keep"/> kept.</summary>
 public sealed class RunLog
 {

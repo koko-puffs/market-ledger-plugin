@@ -21,10 +21,11 @@ namespace MarketLedger.Game;
 /// </summary>
 public sealed unsafe class HoldingsReader
 {
+    /// <summary>A retainer's seven bag pages and its crystals (what can be withdrawn at a bell).</summary>
     private static readonly InventoryType[] RetainerPages =
     {
         InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3, InventoryType.RetainerPage4,
-        InventoryType.RetainerPage5, InventoryType.RetainerPage6, InventoryType.RetainerPage7,
+        InventoryType.RetainerPage5, InventoryType.RetainerPage6, InventoryType.RetainerPage7, InventoryType.RetainerCrystals,
     };
 
     private static readonly InventoryType[] SaddleBags =

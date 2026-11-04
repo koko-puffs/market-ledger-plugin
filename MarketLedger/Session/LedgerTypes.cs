@@ -77,6 +77,9 @@ public sealed class RunState
     /// one: paste it with its Auto-Gather tab's "Import from TeamCraft"), or null.
     /// </summary>
     public string? CopyText { get; init; }
+
+    /// <summary>When the site sent it (null when not known: a run picked up again after loading).</summary>
+    public DateTime? SentAt { get; init; }
 }
 
 /// <summary>

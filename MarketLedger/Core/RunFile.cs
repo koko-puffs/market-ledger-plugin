@@ -387,6 +387,12 @@ public sealed record RunProgress(
     IReadOnlyList<ProgressLog> Log,
     string? Message = null)
 {
+    /// <summary>What it's doing now, in words ("Gathering Ra'Kaznar Ore · GatherBuddy Reborn"): <c>doing</c>.</summary>
+    public string? Doing { get; init; }
+
+    /// <summary>It's holding for you in the game (a click not yet seen working, a list to import): <c>heldForYou</c>.</summary>
+    public bool HeldForYou { get; init; }
+
     /// <summary>The most log lines sent (the newest, newest first).</summary>
     public const int LogLines = 40;
 
@@ -410,6 +416,8 @@ public sealed record RunProgress(
             ["log"] = new JsonArray(Log.Take(LogLines).Select(l => (JsonNode)new JsonObject { ["at"] = Iso(l.At), ["who"] = l.Who, ["text"] = l.Text }).ToArray()),
         };
         if (Message != null) o["message"] = Message;
+        if (Doing != null) o["doing"] = Doing;
+        if (HeldForYou) o["heldForYou"] = true;
         return o;
     }
 
@@ -428,7 +436,37 @@ public sealed record RunProgress(
                 if (l is JsonObject lo && JsonRead.Time(lo, "at") is { } at)
                     log.Add(new ProgressLog(at, JsonRead.Str(lo, "who") ?? string.Empty, JsonRead.Str(lo, "text") ?? string.Empty));
         return new RunProgress(status, JsonRead.Int(o, "step") ?? 0, steps, JsonRead.Long(o, "spent") ?? 0, JsonRead.Time(o, "startedAt"),
-            JsonRead.Time(o, "updatedAt") ?? DateTime.UtcNow, log, JsonRead.Str(o, "message"));
+            JsonRead.Time(o, "updatedAt") ?? DateTime.UtcNow, log, JsonRead.Str(o, "message"))
+        {
+            Doing = JsonRead.Str(o, "doing"),
+            HeldForYou = JsonRead.Bool(o, "heldForYou"),
+        };
+    }
+}
+
+/// <summary>
+/// A run the site has as taken and not finished (<c>ml_plugin_inbox</c>'s <c>active</c>: <c>id</c>,
+/// <c>status</c>, <c>command</c>, and, where the site sends them, <c>run</c> (the run file) and
+/// <c>progress</c>). A file or progress that can't be read is null.
+/// </summary>
+public sealed record ActiveRun(Guid Id, RunStatus? Status, string? Command, RunFile? File, RunProgress? Progress)
+{
+    public static ActiveRun? From(JsonObject a)
+    {
+        if (!Guid.TryParse(JsonRead.Str(a, "id"), out var id)) return null;
+        RunFile? file = null;
+        if (a["run"] is JsonObject)
+        {
+            try
+            {
+                file = RunFile.From(a["run"]);
+            }
+            catch (FormatException)
+            {
+                file = null;
+            }
+        }
+        return new ActiveRun(id, RunWords.Status(JsonRead.Str(a, "status")), JsonRead.Str(a, "command"), file, RunProgress.From(a["progress"]));
     }
 }
 
@@ -456,6 +494,9 @@ public static class JsonRead
         if (o[key] is not JsonValue v) return null;
         if (v.TryGetValue<long>(out var l)) return l;
         if (v.TryGetValue<int>(out var i)) return i;
+        // (A value made in memory, not parsed, reads only as its own type: the plugin writes ids as uint.)
+        if (v.TryGetValue<uint>(out var u)) return u;
+        if (v.TryGetValue<ulong>(out var ul) && ul <= long.MaxValue) return (long)ul;
         if (v.TryGetValue<double>(out var d) && double.IsFinite(d) && Math.Abs(d) < 9e15) return (long)Math.Round(d);
         return null;
     }

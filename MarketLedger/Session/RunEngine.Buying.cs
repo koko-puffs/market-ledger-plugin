@@ -216,7 +216,7 @@ public sealed partial class RunEngine
                     n = Math.Min(missing, Math.Min(MaxPerPurchase, stack));
                     if (MarketRule.VendorWhyNot(v.Price, n, MaxGil, Spent, InGame.Gil()) is { } why) return StepOutcome.Halt($"Not bought: {why}.");
                     var room = InGame.FreeSlots() - Math.Max(0, config.KeepFreeSlots);
-                    if (room < MarketRule.NewSlots(InGame.NqCount(line.Item), n, stack)) return StepOutcome.Halt($"Your bags are nearly full ({InGame.FreeSlots()} free slots, {config.KeepFreeSlots} kept free).");
+                    if (!InGame.IsCrystal(line.Item) && room < MarketRule.NewSlots(InGame.NqCount(line.Item), n, stack)) return StepOutcome.Halt($"Your bags are nearly full ({InGame.FreeSlots()} free slots, {config.KeepFreeSlots} kept free).");
                     var row = InGame.ShopRow(v.ShopId, line.Item);
                     if (row < 0)
                     {
@@ -257,7 +257,8 @@ public sealed partial class RunEngine
                 if (InGame.Gil() >= gilBefore && DateTime.UtcNow - gilWait.Value < TimeSpan.FromSeconds(1.5)) return StepOutcome.Waiting;
                 gilWait = null;
                 var spent = Math.Max(0, gilBefore - InGame.Gil());
-                VendorSpent += spent;
+                // Counted at no less than its price: gil the game hasn't taken off yet (a slow server) still counts against the run's.
+                VendorSpent += Math.Max(spent, (long)v.Price * n);
                 Say(HelperNames.Ledger, $"Bought {now - before} × {name} for {spent:N0} gil.");
                 Touch(true);
                 if (spent > (long)v.Price * n) return StepOutcome.Halt($"{name} cost {spent:N0} gil, more than the {(long)v.Price * n:N0} planned.");
@@ -324,7 +325,6 @@ public sealed partial class RunEngine
     {
         var name = InGame.ItemName(line.Item);
         var budget = MarketRule.LineBudget(line.Amount, line.MaxPrice);
-        long lineSpent = 0;
         var before = 0;
         long gilBefore = 0;
         long cost = 0;
@@ -376,14 +376,14 @@ public sealed partial class RunEngine
                     foreach (var l in listings.OrderBy(l => l.UnitPrice))
                     {
                         if (tried.Contains(l.ListingId)) continue;
-                        var why = MarketRule.WhyNot(l.UnitPrice, l.Quantity, l.TotalTax, line.MaxPrice, missing, budget - lineSpent, runLeft, gil, line.Hq, l.Hq);
+                        var why = MarketRule.WhyNot(l.UnitPrice, l.Quantity, l.TotalTax, line.MaxPrice, missing, budget - lineSpent.GetValueOrDefault(line), runLeft, gil, line.Hq, l.Hq);
                         if (why != null)
                         {
                             firstWhy ??= why;
                             continue;
                         }
                         var room = InGame.FreeSlots() - Math.Max(0, config.KeepFreeSlots);
-                        if (room < MarketRule.NewSlots(l.Hq ? 0 : InGame.NqCount(line.Item), l.Quantity, InGame.StackSize(line.Item)))
+                        if (!InGame.IsCrystal(line.Item) && room < MarketRule.NewSlots(l.Hq ? 0 : InGame.NqCount(line.Item), l.Quantity, InGame.StackSize(line.Item)))
                         {
                             firstWhy ??= $"your bags have {Math.Max(0, room)} free slots past the {config.KeepFreeSlots} kept free";
                             continue;
@@ -463,8 +463,10 @@ public sealed partial class RunEngine
                     var now = InGame.BagCount(line.Item);
                     BoardListings.Gone(listing);
                     var spent = Math.Max(0, gilBefore - InGame.Gil());
-                    MarketSpent += spent;
-                    lineSpent += spent;
+                    // Counted at no less than the listing's cost: gil the game hasn't taken off yet still counts.
+                    var counted = Math.Max(spent, cost);
+                    MarketSpent += counted;
+                    lineSpent[line] = lineSpent.GetValueOrDefault(line) + counted;
                     Say(HelperNames.Ledger, $"Bought {now - before} × {name} for {spent:N0} gil.");
                     Touch(true);
                     if (spent > cost + 1) return StepOutcome.Halt($"That listing cost {spent:N0} gil, more than the {cost:N0} it showed.");

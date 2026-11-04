@@ -19,10 +19,12 @@ namespace MarketLedger.Session;
 /// gathering jobs' levels, gil, free bag slots), when you log in and every 10 minutes; its answer says
 /// whose account the token is.</item>
 /// <item><c>ml_plugin_holdings</c>: what you hold, place by place, when it changes, at most every 2 minutes.</item>
-/// <item><c>ml_plugin_inbox</c>: the runs sent from the site (every 30 s; every 5 s while a run is in hand),
-/// and a pending command for the run in hand.</item>
-/// <item><c>ml_plugin_run_update</c>: the run's status and progress on each change (at most every 2 s) and
-/// every 15 s while it runs; its answer may carry a command from the site (pause, resume, skip, stop).</item>
+/// <item><c>ml_plugin_inbox</c>: the runs sent from the site (every 30 s; every 6 s while a run is in hand),
+/// a pending command for the run in hand, and (once, after loading) the run this plugin had in hand.</item>
+/// <item><c>ml_plugin_run_update</c>: taking a run before it starts (<see cref="Claim"/>: "accepted"), then its
+/// status and progress on each change (at most every 2 s) and every 15 s while it runs; its answer may carry a
+/// command from the site (pause, resume, skip, stop). Each run's last word (done, stopped, failed, or paused
+/// as the plugin unloads) is queued until the site takes it, so starting another never loses it.</item>
 /// <item><c>ml_plugin_sales</c> and <c>ml_plugin_listings</c>: a retainer's sales and listings, read while
 /// their windows are open, each sent once.</item>
 /// </list>
@@ -41,12 +43,13 @@ public sealed class SiteSync : IDisposable
     private readonly ConcurrentQueue<Action> answers = new();
 
     // Each kind of call paced well under the site's hourly limits for a person (hello 240, holdings 240,
-    // inbox 720, run_update 3,600, sales 240, listings 480): at most 180, 30, 600, 1,800, 240 and 450.
+    // inbox 720, run_update 3,600, sales 240, listings 480): at most 180, 30, 600, 1,800, 180 and 450 (claims
+    // and the last word on unloading, a few at most, go besides).
     private readonly Pace hello = new(TimeSpan.FromSeconds(20), HelloEvery);
     private readonly Pace holdingsPace = new(TimeSpan.FromMinutes(2));
     private readonly Pace inbox = new(TimeSpan.FromSeconds(6), TimeSpan.FromSeconds(30));
     private readonly Pace update = new(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(15));
-    private readonly Pace salesPace = new(TimeSpan.FromSeconds(15));
+    private readonly Pace salesPace = new(TimeSpan.FromSeconds(20));
     private readonly Pace listingsPace = new(TimeSpan.FromSeconds(8));
 
     /// <summary>How long a kind of call waits after the site says "too often".</summary>
@@ -69,6 +72,30 @@ public sealed class SiteSync : IDisposable
     /// <summary>A run the site refused progress for (its <c>run</c> hint): not sent again.</summary>
     private Guid? updatesRefused;
 
+    /// <summary>Runs' last words (done, stopped, failed; paused on unloading), oldest first, until the site takes each.</summary>
+    private readonly List<(Guid Id, string RunId, RunStatus Status, JsonObject? Progress)> finals = new();
+
+    /// <summary>Refused as switched off: the link is tried again then.</summary>
+    private DateTime? offRetryAt;
+
+    private static readonly TimeSpan OffRetry = TimeSpan.FromMinutes(10);
+
+    /// <summary>A run being taken from the site (<see cref="Claim"/>), one at a time.</summary>
+    private bool claiming;
+
+    /// <summary>The inbox has answered once since the plugin loaded (the run in hand before is looked for then).</summary>
+    private bool activeSeen;
+
+    private DateTime windowsReadAt;
+
+    /// <summary>
+    /// The site's runs that are taken and not finished, as the first inbox after loading says them: the
+    /// session picks up the one this plugin had in hand.
+    /// </summary>
+    public event Action<IReadOnlyList<ActiveRun>>? ActiveSeen;
+
+    /// <summary>A run's last word was taken by the site (its id and the status said).</summary>
+    public event Action<Guid, RunStatus>? FinalTaken;
     public SiteSync(Configuration config, RunEngine engine, HoldingsReader holdings, AllaganTools allagan)
     {
         this.config = config;
@@ -77,6 +104,7 @@ public sealed class SiteSync : IDisposable
         this.allagan = allagan;
         site = new SiteSession(() => config.Token);
         engine.Changed += () => update.Changed();
+        engine.Ended += (file, progress) => QueueFinal(file, progress);
         Relinked();
     }
 
@@ -103,6 +131,8 @@ public sealed class SiteSync : IDisposable
         listingsPace.Reset();
         holdingsSent = string.Empty;
         lastSentStatus = null;
+        offRetryAt = null;
+        updatesRefused = null;
         Waiting = Array.Empty<(Guid, string, DateTime, RunFile)>();
         Link = site.Linked ? new LinkState.Linking() : (LinkState)new LinkState.Unlinked();
         if (site.Linked)
@@ -130,7 +160,18 @@ public sealed class SiteSync : IDisposable
         ReadCharacter(now);
         holdings.Tick();
         ReadRetainerWindows(now);
-        if (!site.Linked || Link is LinkState.Refused) return;
+        if (!site.Linked) return;
+        if (Link is LinkState.Refused)
+        {
+            // Switched off on the site "for now": asked again every 10 minutes.
+            if (offRetryAt is not { } at || now < at) return;
+            offRetryAt = null;
+            Link = new LinkState.Linking();
+            hello.Reset();
+            hello.Changed();
+            inbox.Changed();
+            Version++;
+        }
 
         // A run in hand: the inbox is asked more often (the site's buttons answer sooner).
         inbox.Every = engine.Active ? TimeSpan.FromSeconds(6) : TimeSpan.FromSeconds(30);
@@ -140,9 +181,13 @@ public sealed class SiteSync : IDisposable
         if (Link is not LinkState.Linked) return;
         if (Character != null && holdingsPace.Due(now)) SendHoldings();
         if (inbox.Due(now)) AskInbox();
-        // The run's status as the site knows it ("sent" and "draft" are the site's own, never said).
-        if (engine.File is { } run && engine.Status is not (RunStatus.Draft or RunStatus.Sent) && updatesRefused != run.Guid
-            && (engine.Active || lastSentStatus != engine.Status) && update.Due(now)) SendUpdate(run);
+        // Runs' last words first (one replaced by another must still be heard of), then the run in hand's
+        // progress ("sent" and "draft" are the site's own words, never said).
+        if (finals.Count > 0)
+        {
+            if (update.Due(now)) SendFinal(finals[0]);
+        }
+        else if (engine.File is { } run && engine.Active && updatesRefused != run.Guid && update.Due(now)) SendUpdate(run);
         if (Character is { } who && salesWaiting.Count > 0 && salesPace.Due(now)) SendSales(who.Key);
         if (Character is { } me && listingsWaiting != null && listingsPace.Due(now)) SendListings(me.Key);
     }
@@ -177,6 +222,9 @@ public sealed class SiteSync : IDisposable
             hello.Changed();
             holdingsPace.Reset();
             holdingsSent = string.Empty;
+            // What another character's retainers listed and sold isn't this one's.
+            salesWaiting.Clear();
+            listingsWaiting = null;
         }
         else if (before != null && (before.Gil != c.Gil || before.FreeSlots != c.FreeSlots)) Version++;
         // What's held: looked at every 10 s, sent when it's changed (at most every 2 min).
@@ -193,6 +241,9 @@ public sealed class SiteSync : IDisposable
 
     private void ReadRetainerWindows(DateTime now)
     {
+        // Once a second: the sale history's values are read whole each time.
+        if (now - windowsReadAt < TimeSpan.FromSeconds(1)) return;
+        windowsReadAt = now;
         if (RetainerMarket.Listings() is { } l)
         {
             var print = ListingRow.Fingerprint(l.Retainer, l.Rows);
@@ -206,12 +257,15 @@ public sealed class SiteSync : IDisposable
             }
         }
         if (RetainerMarket.Sales() is { } s)
+        {
+            var waitingKeys = salesWaiting.Select(w => w.Key).ToHashSet(StringComparer.Ordinal);
             foreach (var row in s.Rows)
-                if (!salesSent.Contains(row.Key) && salesWaiting.All(w => w.Key != row.Key))
+                if (!salesSent.Contains(row.Key) && waitingKeys.Add(row.Key))
                 {
                     salesWaiting.Add(row);
                     salesPace.Changed();
                 }
+        }
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -235,6 +289,7 @@ public sealed class SiteSync : IDisposable
                     if (r.TokenRefused || (r.Hint == "off"))
                     {
                         Link = new LinkState.Refused(r.Why ?? "The site turned the link down.");
+                        offRetryAt = r.Hint == "off" ? DateTime.UtcNow + OffRetry : null;
                         Version++;
                     }
                 }
@@ -325,8 +380,25 @@ public sealed class SiteSync : IDisposable
                         Services.Log.Warning($"Market Ledger: the run \"{JsonRead.Str(ro, "name")}\" from the site can't be read: {ex.Message}");
                     }
                 }
-            Waiting = waiting.Where(w => engine.File?.Guid != w.Item1 || !engine.Active).ToList();
+            // A run this plugin has had in hand isn't offered again (the inbox may be a moment behind).
+            Waiting = waiting.Where(w => !engine.Taken.Contains(w.Item1)).ToList();
             Version++;
+            if (!activeSeen)
+            {
+                activeSeen = true;
+                var list = new List<ActiveRun>();
+                if (o["active"] is JsonArray all)
+                    foreach (var n in all)
+                        if (n is JsonObject a && ActiveRun.From(a) is { } taken) list.Add(taken);
+                try
+                {
+                    ActiveSeen?.Invoke(list);
+                }
+                catch (Exception ex)
+                {
+                    Services.Log.Warning(ex, "Market Ledger couldn't look for the run it had in hand");
+                }
+            }
             // A command waiting for the run in hand: the inbox only shows it; the next run update fetches
             // it (it's handed over once, there), so that goes now.
             if (o["active"] is JsonArray active && engine.File is { } run)
@@ -362,6 +434,8 @@ public sealed class SiteSync : IDisposable
                 {
                     updatesRefused = runId;
                     engine.Say(HelperNames.Ledger, $"The site won't take this run's progress any more: {r.Why}");
+                    // Stopped or deleted there: it isn't carried on here (nor any more gil spent on it).
+                    if (engine.Active && engine.File?.Guid == runId) engine.Stop("The run was stopped or deleted on the site.");
                 }
                 return;
             }
@@ -407,6 +481,114 @@ public sealed class SiteSync : IDisposable
             listingsSent[l.Retainer] = l.Print;
             if (listingsWaiting?.Print == l.Print) listingsWaiting = null;
         });
+    }
+
+    /// <summary>A run's last word, kept until the site takes it (one said again for the same run replaces it).</summary>
+    public void QueueFinal(RunFile file, RunProgress progress) => QueueFinal(file.Guid, file.Id, progress.Status, progress.ToJson());
+
+    /// <summary>A run's last word: its status, and its progress (null keeps what the site has).</summary>
+    public void QueueFinal(Guid id, string runId, RunStatus status, JsonObject? progress)
+    {
+        finals.RemoveAll(f => f.Id == id);
+        finals.Add((id, runId, status, progress));
+        update.Changed();
+    }
+
+    private void SendFinal((Guid Id, string RunId, RunStatus Status, JsonObject? Progress) f)
+    {
+        Call("ml_plugin_run_update", FinalArgs(f), update, r =>
+        {
+            // Taken; or refused as not the site's any more (or unreadable): either way, not said again.
+            if (!r.Ok && r.Hint is not ("run" or "data" or "size")) return;
+            finals.RemoveAll(x => x.Id == f.Id && x.Status == f.Status);
+            if (updatingRun == f.Id) lastSentStatus = f.Status;
+            if (r.Ok) FinalTaken?.Invoke(f.Id, f.Status);
+        });
+    }
+
+    private static JsonObject FinalArgs((Guid Id, string RunId, RunStatus Status, JsonObject? Progress) f) => new()
+    {
+        ["p_run"] = f.RunId,
+        ["p_status"] = RunWords.Of(f.Status),
+        ["p_progress"] = f.Progress?.DeepClone(),
+    };
+
+    /// <summary>
+    /// The plugin is unloading: the runs' last words still waiting go now, waiting at most
+    /// <paramref name="wait"/> for the site (the game waits meanwhile, so it's short).
+    /// </summary>
+    public void FlushOnUnload(TimeSpan wait)
+    {
+        if (!site.Linked || finals.Count == 0) return;
+        var deadline = DateTime.UtcNow + wait;
+        foreach (var f in finals.ToList())
+        {
+            var left = deadline - DateTime.UtcNow;
+            if (left <= TimeSpan.FromMilliseconds(100)) break;
+            try
+            {
+                var task = site.Call("ml_plugin_run_update", FinalArgs(f), left);
+                if (!task.Wait(left)) break;
+                if (task.Result.Ok) finals.Remove(f);
+            }
+            catch (Exception ex)
+            {
+                Services.Log.Debug(ex, "Market Ledger couldn't tell the site about the run while unloading");
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes a run from the site before it starts: says it's "accepted" (the site lets one plugin take a
+    /// run sent, once; a run stopped there meanwhile is refused). <paramref name="then"/> runs on the framework
+    /// thread with the answer, whatever happens.
+    /// </summary>
+    public void Claim(RunFile file, Action<RpcResult> then)
+    {
+        if (claiming)
+        {
+            then(new RpcResult(false, null, "Another run is being taken from the site: a moment."));
+            return;
+        }
+        if (!site.Linked || Link is not LinkState.Linked)
+        {
+            then(new RpcResult(false, null, "The plugin isn't linked to the site yet (Settings), so it can't take the run."));
+            return;
+        }
+        claiming = true;
+        var args = new JsonObject
+        {
+            ["p_run"] = file.Id,
+            ["p_status"] = RunWords.Of(RunStatus.Accepted),
+            ["p_progress"] = Accepted(file).ToJson(),
+        };
+        var gen = generation;
+        site.Call("ml_plugin_run_update", args).ContinueWith(t =>
+        {
+            var r = t.Status == TaskStatus.RanToCompletion ? t.Result : new RpcResult(false, null, "The call failed.", Unreachable: true);
+            answers.Enqueue(() =>
+            {
+                claiming = false;
+                if (gen != generation) r = new RpcResult(false, null, "The link changed meanwhile: try again.");
+                else if (r.TokenRefused || r.Hint == "off")
+                {
+                    Link = new LinkState.Refused(r.Why ?? "The site turned the link down.");
+                    offRetryAt = r.Hint == "off" ? DateTime.UtcNow + OffRetry : null;
+                    Version++;
+                }
+                if (r.Ok) updatingRun = file.Guid;
+                then(r);
+            });
+        }, TaskScheduler.Default);
+    }
+
+    /// <summary>A run's progress as it's taken: every step still to do.</summary>
+    public static RunProgress Accepted(RunFile file)
+    {
+        var now = DateTime.UtcNow;
+        var steps = file.Steps.Select(s => new ProgressStep(s.Id, StepState.Waiting, 0, s.Lines.Sum(l => Math.Max(0, l.Amount)))).ToList();
+        return new RunProgress(RunStatus.Accepted, 0, steps, 0, null, now, new[] { new ProgressLog(now, HelperNames.Ledger, "Taken by the plugin.") });
     }
 
     /// <summary>A run was started or ended here: the site hears at once.</summary>

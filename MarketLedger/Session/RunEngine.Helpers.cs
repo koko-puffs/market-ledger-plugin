@@ -26,11 +26,21 @@ public sealed partial class RunEngine
     private string? gatherStatusSaid;
     private DateTime gatherStatusAt;
 
+    /// <summary>Since when GatherBuddy Reborn hasn't answered whether it's on, and since when it's waited with nothing to wait for.</summary>
+    private DateTime? gatherSilentSince;
+
+    private DateTime? gatherIdleSince;
+
+    /// <summary>How long GatherBuddy Reborn may wait with nothing it can gather before the run pauses (no timed node's window to come).</summary>
+    private static readonly TimeSpan GatherIdleWait = TimeSpan.FromSeconds(90);
+
     private void BeginGather(RunStep step)
     {
         gatherStarted = false;
         gatherHeld = false;
         gatherOffSince = null;
+        gatherSilentSince = null;
+        gatherIdleSince = null;
         gatherBegan = DateTime.UtcNow;
         if (!GatherBuddy.Installed)
         {
@@ -139,12 +149,21 @@ public sealed partial class RunEngine
             gatherStatusAt = now;
             Say(HelperNames.GatherBuddy, status);
         }
+        if (enabled == null)
+        {
+            // Not answering at all (unloaded, or another version): nothing to watch it by.
+            gatherSilentSince ??= now;
+            if (now - gatherSilentSince.Value > TimeSpan.FromSeconds(30))
+                StepProblem("GatherBuddy Reborn stopped answering (unloaded, or updated?). Check it in Helpers, then Resume; or Skip.");
+            return;
+        }
+        gatherSilentSince = null;
         if (enabled == false)
         {
             gatherOffSince ??= now;
             if (now - gatherOffSince.Value > TimeSpan.FromSeconds(5))
                 StepProblem($"GatherBuddy Reborn stopped auto-gathering{(string.IsNullOrEmpty(status) ? string.Empty : $" (\"{status}\")")} with "
-                            + $"{string.Join(", ", missing.Select(l => $"{StepMath.Missing(step.Kind, l, Have(step.Kind, l))} × {InGame.ItemName(l.Item)}"))} still to gather. Resume to try again, or Skip.");
+                            + $"{string.Join(", ", missing.Select(l => $"{StepMath.Missing(step.Kind, l, Have(step.Kind, l))} × {InGame.ItemName(l.Item)}"))} still to gather. Resume to try again, or Skip. (If it counts your retainers' items, its \"Check Retainer Inventories\" setting, it may think it has them already.)");
             return;
         }
         gatherOffSince = null;
@@ -152,6 +171,21 @@ public sealed partial class RunEngine
         var first = missing[0];
         if (GatherBuddy.Waiting == true)
         {
+            // Waiting is right while a timed node's window is still to open. Otherwise it has nothing it can
+            // gather ("No available items to gather"): not for long, or the run would wait for ever.
+            var windowToCome = missing.Any(l => l.Timed is { } w && !Eorzea.NextWindow(w, now).Open);
+            if (windowToCome) gatherIdleSince = null;
+            else
+            {
+                gatherIdleSince ??= now;
+                if (now - gatherIdleSince.Value > GatherIdleWait)
+                {
+                    StepProblem($"GatherBuddy Reborn has nothing it can gather{(string.IsNullOrEmpty(status) ? string.Empty : $" (\"{status}\")")} with "
+                                + $"{string.Join(", ", missing.Select(l => $"{StepMath.Missing(step.Kind, l, Have(step.Kind, l))} × {InGame.ItemName(l.Item)}"))} still to come to your bags. "
+                                + "It may count what your retainers hold (its \"Check Retainer Inventories\" setting: the run counts your bags only), or not gather them at your level. Gather them yourself and Resume, or Skip.");
+                    return;
+                }
+            }
             var words = TimedWords(missing) ?? $"GatherBuddy Reborn is waiting{(string.IsNullOrEmpty(status) ? "." : $": {status}")}";
             if (Status != RunStatus.Waiting || Message != words)
             {
@@ -161,11 +195,15 @@ public sealed partial class RunEngine
                 Touch(true);
             }
         }
-        else if (Status == RunStatus.Waiting)
+        else
         {
-            Status = RunStatus.Running;
-            Message = null;
-            Touch(true);
+            gatherIdleSince = null;
+            if (Status == RunStatus.Waiting)
+            {
+                Status = RunStatus.Running;
+                Message = null;
+                Touch(true);
+            }
         }
         var doing = $"Gathering {InGame.ItemName(first.Item)} · {HelperNames.GatherBuddy}";
         if (Doing != doing)
@@ -219,6 +257,11 @@ public sealed partial class RunEngine
     private DateTime craftBegan;
     private DateTime? craftIdleSince;
     private DateTime? craftDoneAt;
+    private int craftLastDone;
+    private DateTime craftProgressAt;
+
+    /// <summary>How long Artisan may be busy without one more made before the run pauses (a craft takes a minute or two at most).</summary>
+    private static readonly TimeSpan CraftStallWait = TimeSpan.FromMinutes(10);
 
     private void BeginCraft(RunStep step)
     {
@@ -283,6 +326,8 @@ public sealed partial class RunEngine
             craftSeenBusy = false;
             craftIdleSince = null;
             craftAskedAt = now;
+            craftLastDone = done;
+            craftProgressAt = now;
             Say(HelperNames.Artisan, $"Crafting {crafts} × {name} (recipe {step.Recipe}{(step.Job != null ? $", {step.Job}" : string.Empty)}).");
             Doing = $"Crafting {name} · {HelperNames.Artisan}";
             Touch(true);
@@ -292,6 +337,16 @@ public sealed partial class RunEngine
         {
             craftSeenBusy = true;
             craftIdleSince = null;
+            if (done != craftLastDone)
+            {
+                craftLastDone = done;
+                craftProgressAt = now;
+            }
+            else if (now - craftProgressAt > CraftStallWait)
+            {
+                StepProblem($"Artisan has been busy for {CraftStallWait.TotalMinutes:0} minutes without making another {name} (stuck on a window?). Look at it, then Resume; or Skip.");
+                return;
+            }
             var doing = $"Crafting {name} ({done} of {of}) · {HelperNames.Artisan}";
             if (Doing != doing)
             {

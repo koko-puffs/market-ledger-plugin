@@ -84,7 +84,7 @@ public sealed partial class RunEngine : IDisposable
 
     public IReadOnlyList<string?> Notes => notes;
 
-    /// <summary>Gil spent so far, vendors and the market together.</summary>
+    /// <summary>Gil spent so far, vendors and the market together (and, for a run picked up again, what it had spent before).</summary>
     public long Spent => VendorSpent + MarketSpent;
 
     public long VendorSpent { get; private set; }
@@ -105,6 +105,26 @@ public sealed partial class RunEngine : IDisposable
 
     /// <summary>A run is in hand and not finished.</summary>
     public bool Active => File != null && !RunWords.Finished(Status);
+
+    /// <summary>The key of the character you're playing (the site's id for it), or null when not known; set by the session.</summary>
+    public Func<string?> CharacterKey { get; set; } = () => null;
+
+    /// <summary>The runs this plugin has had in hand since it loaded: never offered or started again.</summary>
+    public IReadOnlyCollection<Guid> Taken => taken;
+
+    private readonly HashSet<Guid> taken = new();
+
+    /// <summary>The character (content id) the run is being carried out by: another one logged in pauses it.</summary>
+    private ulong runBy;
+
+    /// <summary>What each market line has spent this run (its budget holds across pauses and resumes).</summary>
+    private readonly Dictionary<RunLine, long> lineSpent = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>A site command not obeyed (Settings), said in the progress for a while.</summary>
+    private (string Text, DateTime Until)? siteNote;
+
+    /// <summary>A run came to its end (done, stopped or failed): its last progress, for the site.</summary>
+    public event Action<RunFile, RunProgress>? Ended;
 
     /// <summary>Goes up whenever anything above changes (the session makes its RunState afresh).</summary>
     public int Version { get; private set; }
@@ -150,17 +170,27 @@ public sealed partial class RunEngine : IDisposable
     }
 
     /// <summary>The progress as the site takes it (<c>ml_plugin_run_update</c>).</summary>
-    public RunProgress Progress() =>
-        new(Status, Math.Clamp(StepIndex, 0, Math.Max(0, (File?.Steps.Count ?? 1) - 1)), StepsNow(), Spent, StartedAt, DateTime.UtcNow, log.Lines.Take(RunProgress.LogLines).ToList(), Message);
+    public RunProgress Progress()
+    {
+        var note = siteNote is { } n && DateTime.UtcNow < n.Until ? n.Text : null;
+        return new(Status, Math.Clamp(StepIndex, 0, Math.Max(0, (File?.Steps.Count ?? 1) - 1)), StepsNow(), Spent, StartedAt, DateTime.UtcNow,
+            log.Lines.Take(RunProgress.LogLines).ToList(), Message ?? note)
+        {
+            Doing = Doing,
+            HeldForYou = HeldForYou,
+        };
+    }
 
     // ---------------------------------------------------------------------------------------------
     // Starting, pausing, stopping.
 
     /// <summary>Why a run can't start now, or null when it can.</summary>
-    public string? CanStart(RunFile file)
+    public string? CanStart(RunFile file, bool overRunInHand = false)
     {
-        if (Active) return "Another run is in hand: stop it first.";
+        if (Active && !overRunInHand) return "Another run is in hand: stop it first.";
+        if (taken.Contains(file.Guid) && File?.Guid != file.Guid) return "This run has been in hand already: send it again from the site to run it again.";
         if (!Services.ClientState.IsLoggedIn || Services.Objects.LocalPlayer == null) return "Log in first.";
+        if (OtherCharacter(file) is { } who) return who;
         if (InGame.Blocked(false) is { } why) return why;
         var kinds = file.Steps.Select(s => s.Kind).ToHashSet();
         if (kinds.Contains(RunStepKind.Craft) && !Artisan.Installed) return "The run crafts: install Artisan first.";
@@ -173,32 +203,91 @@ public sealed partial class RunEngine : IDisposable
         return null;
     }
 
-    public void Start(RunFile file)
+    /// <summary>Why the run isn't this character's (null when it is, or when the run names nobody).</summary>
+    private string? OtherCharacter(RunFile file)
     {
-        if (CanStart(file) is { } why)
-        {
-            Message = why;
-            Touch(true);
-            return;
-        }
-        File = file;
+        if (string.IsNullOrEmpty(file.Character)) return null;
+        var me = CharacterKey();
+        if (me == null) return "Your character isn't read yet: try again in a moment.";
+        return string.Equals(me, file.Character, StringComparison.Ordinal) ? null
+            : "It was planned for another of your characters (its bags, retainers and gil). Log in with that one, or plan it again for this one.";
+    }
+
+    /// <summary>
+    /// Starts a run (the site has given it to this plugin: <see cref="SiteSync.Claim"/>). With
+    /// <paramref name="pausedWhy"/>, it's in hand but paused, saying why (something came up while the site
+    /// was asked): Resume starts it.
+    /// </summary>
+    public void Start(RunFile file, string? pausedWhy = null)
+    {
+        if (Active) Stop($"Put aside for \"{file.Name}\".");
+        Take(file);
         states = file.Steps.Select(_ => StepState.Waiting).ToArray();
         notes = new string?[file.Steps.Count];
         StepIndex = 0;
-        VendorSpent = MarketSpent = 0;
         StartedAt = DateTime.UtcNow;
+        Say(HelperNames.Ledger, $"Started \"{file.Name}\": {file.Steps.Count} steps, up to {file.MaxGil:N0} gil agreed.");
+        if (pausedWhy != null)
+        {
+            Status = RunStatus.Paused;
+            pausedAt = DateTime.UtcNow;
+            Message = pausedWhy;
+            Say(HelperNames.Ledger, $"Paused: {pausedWhy}");
+            Touch(true);
+            return;
+        }
+        Status = RunStatus.Running;
+        HoldHelpers();
+        BeginStep(NextFrom(0));
+        Touch(true);
+    }
+
+    /// <summary>
+    /// A run this plugin had in hand when it was unloaded, picked up again from the progress the site kept:
+    /// paused (your bags say where each step is; Resume carries on). What it had spent still counts against
+    /// the gil agreed.
+    /// </summary>
+    public void Adopt(RunFile file, RunProgress? progress)
+    {
+        if (Active) return;
+        Take(file);
+        var (s, n, step) = RunPickup.Restore(file, progress);
+        states = s;
+        notes = n;
+        StepIndex = step;
+        // Spent before counts against the run's gil, and (to be safe) against your market ceiling too.
+        MarketSpent = Math.Max(0, progress?.Spent ?? 0);
+        StartedAt = progress?.StartedAt ?? DateTime.UtcNow;
+        foreach (var l in (progress?.Log ?? Array.Empty<ProgressLog>()).Reverse()) log.Add(l.At, l.Who, l.Text);
+        Status = RunStatus.Paused;
+        pausedAt = DateTime.UtcNow;
+        Message = "Picked up again after the plugin loaded. Press Resume to carry on from what your bags hold.";
+        Say(HelperNames.Ledger, $"Picked up \"{file.Name}\" again ({Spent:N0} gil spent before): paused until you Resume.");
+        Touch(true);
+    }
+
+    private void Take(RunFile file)
+    {
+        File = file;
+        taken.Add(file.Guid);
+        lineSpent.Clear();
+        VendorSpent = MarketSpent = 0;
         Message = null;
         Doing = null;
         HeldForYou = false;
         CopyText = null;
+        siteNote = null;
+        gatherHeld = false;
         log.Clear();
         lastTerritory = InGame.Territory;
-        Status = RunStatus.Running;
-        Say(HelperNames.Ledger, $"Started \"{file.Name}\": {file.Steps.Count} steps, up to {file.MaxGil:N0} gil agreed.");
-        if (config.HoldAutoRetainer && AutoRetainer.Installed)
+        runBy = Services.PlayerState.ContentId;
+    }
+
+    /// <summary>AutoRetainer held for the run, when that's asked for (on starting, and on resuming a run picked up again).</summary>
+    private void HoldHelpers()
+    {
+        if (config.HoldAutoRetainer && AutoRetainer.Installed && !AutoRetainer.Held)
             Say(HelperNames.AutoRetainer, AutoRetainer.Hold() ? "Held until the run's done." : "Didn't answer: not held.");
-        BeginStep(NextFrom(0));
-        Touch(true);
     }
 
     /// <summary>Pauses: whatever a helper is doing stops, the step starts again on Resume.</summary>
@@ -242,9 +331,12 @@ public sealed partial class RunEngine : IDisposable
             return;
         }
         if (Status != RunStatus.Paused) return;
-        if (InGame.Blocked(false) is { } why)
+        var blocked = !Services.ClientState.IsLoggedIn || Services.Objects.LocalPlayer == null ? "log in first."
+            : File != null && OtherCharacter(File) is { } other ? other
+            : InGame.Blocked(false);
+        if (blocked != null)
         {
-            Message = $"Can't resume yet: {why}";
+            Message = $"Can't resume yet: {blocked}";
             Touch(true);
             return;
         }
@@ -252,6 +344,8 @@ public sealed partial class RunEngine : IDisposable
         Message = null;
         pausedAt = null;
         lastTerritory = InGame.Territory;
+        runBy = Services.PlayerState.ContentId;
+        HoldHelpers();
         Say(HelperNames.Ledger, "Resumed.");
         BeginStep(NextFrom(StepIndex));
         Touch(true);
@@ -288,6 +382,20 @@ public sealed partial class RunEngine : IDisposable
         Say(HelperNames.Ledger, $"Stopped: {why} ({Spent:N0} gil spent).");
         if (config.ChatMessages) Services.Chat.PrintError($"Stopped: {why}", "Market Ledger");
         Touch(true);
+        RaiseEnded();
+    }
+
+    private void RaiseEnded()
+    {
+        if (File is not { } file) return;
+        try
+        {
+            Ended?.Invoke(file, Progress());
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Warning(ex, "Market Ledger couldn't note the run's end for the site");
+        }
     }
 
     private void Finish()
@@ -302,6 +410,7 @@ public sealed partial class RunEngine : IDisposable
         Say(HelperNames.Ledger, short_ == 0 ? $"Done: every step's through, {Spent:N0} gil spent." : $"Done, {short_} step{(short_ == 1 ? string.Empty : "s")} short (see their notes); {Spent:N0} gil spent.");
         if (config.ChatMessages) Services.Chat.Print($"\"{File?.Name}\" is done.", "Market Ledger");
         Touch(true);
+        RaiseEnded();
     }
 
     /// <summary>Puts the run in hand away (after it's finished, or for another).</summary>
@@ -440,12 +549,28 @@ public sealed partial class RunEngine : IDisposable
         catch (Exception ex)
         {
             Services.Log.Error(ex, "Market Ledger's run failed");
-            HaltStep();
+            // Failed first, so a let-go that throws too never has this run tried again every frame.
             Status = RunStatus.Failed;
             Message = $"Something went wrong ({ex.Message}); stopped to be safe.";
-            LetGo();
+            Doing = null;
+            HeldForYou = false;
+            Quietly(HaltStep);
+            Quietly(LetGo);
             Say(HelperNames.Ledger, Message);
             Touch(true);
+            RaiseEnded();
+        }
+    }
+
+    private static void Quietly(Action a)
+    {
+        try
+        {
+            a();
+        }
+        catch (Exception ex)
+        {
+            Services.Log.Warning(ex, "Market Ledger couldn't let go of something");
         }
     }
 
@@ -463,6 +588,11 @@ public sealed partial class RunEngine : IDisposable
         if (InGame.Blocked(travelOk) is { } why)
         {
             Pause(why);
+            return;
+        }
+        if (runBy != 0 && Services.PlayerState.ContentId is var me && me != 0 && me != runBy)
+        {
+            Pause("Another character is logged in.");
             return;
         }
         var t = InGame.Territory;
@@ -504,15 +634,26 @@ public sealed partial class RunEngine : IDisposable
     /// <summary>What the site asked (<c>ml_plugin_run_update</c>'s command), when you let it.</summary>
     public void Command(RunCommand command)
     {
+        if (!Active) return;
         if (!config.LetSiteControl)
         {
-            Say(HelperNames.Ledger, $"The site asked to {RunWords.Of(command)}; that's off in Settings.");
+            var text = $"The site asked to {RunWords.Of(command)}; that's turned off in the plugin's Settings (Let the site pause and stop).";
+            Say(HelperNames.Ledger, text);
+            siteNote = (text, DateTime.UtcNow + TimeSpan.FromMinutes(2));
+            Touch(true);
             return;
         }
         switch (command)
         {
             case RunCommand.Pause:
                 Pause("Paused from the site.");
+                break;
+            case RunCommand.Resume when HeldForYou:
+                // What's held is held for someone watching the game (a click not yet seen working, a list to import).
+                var held = "The site asked to resume; what the run's waiting for needs you in the game: press Resume there.";
+                Say(HelperNames.Ledger, held);
+                siteNote = (held, DateTime.UtcNow + TimeSpan.FromMinutes(2));
+                Touch(true);
                 break;
             case RunCommand.Resume:
                 Resume();
@@ -542,10 +683,34 @@ public sealed partial class RunEngine : IDisposable
         return TimeSpan.FromMinutes(File.Estimate.Minutes * (1 - fraction));
     }
 
+    /// <summary>
+    /// The plugin is going: whatever the run started stops, and it's left paused ("The plugin was unloaded."),
+    /// so the plugin picks it up again when it loads. Its progress then, for the site's last word (null when no
+    /// run was in hand).
+    /// </summary>
+    public (RunFile File, RunProgress Progress)? Unload()
+    {
+        unloaded = true;
+        if (!Active || File is not { } file)
+        {
+            Quietly(LetGo);
+            return null;
+        }
+        Quietly(HaltStep);
+        Quietly(LetGo);
+        Status = RunStatus.Paused;
+        Message = "The plugin was unloaded.";
+        Doing = null;
+        HeldForYou = false;
+        Say(HelperNames.Ledger, "Paused: the plugin was unloaded.");
+        return (file, Progress());
+    }
+
+    private bool unloaded;
+
     public void Dispose()
     {
-        if (Active) Stop("The plugin was unloaded.");
-        LetGo();
+        if (!unloaded) Unload();
     }
 
     private static void CloseWindows()
