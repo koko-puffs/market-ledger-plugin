@@ -143,6 +143,9 @@ public sealed unsafe class HoldingsReader
     /// <summary>The tomestones' item ids (the game's <c>TomestonesItem</c> sheet), looked up once.</summary>
     private uint[]? tomestones;
 
+    /// <summary>Reading the currencies has failed once (said once in the log, not every 10 seconds).</summary>
+    private bool currencyFailed;
+
     private uint[] Tomestones()
     {
         if (tomestones != null) return tomestones;
@@ -219,7 +222,16 @@ public sealed unsafe class HoldingsReader
         if (me.Length == 0 || me == "0" || mgr == null) return places;
         if (Read(mgr, InGame.Bags) is { } bags) places.Add(new Place("Bags", "bags", bags));
         if (Read(mgr, new[] { InventoryType.Crystals }) is { } crystals) places.Add(new Place("Crystals", "crystals", crystals));
-        if (ReadCurrencies(mgr) is { } currencies) places.Add(currencies);
+        // A failure reading the currencies costs only them, not the bags and retainers sent with them.
+        try
+        {
+            if (ReadCurrencies(mgr) is { } currencies) places.Add(currencies);
+        }
+        catch (Exception ex)
+        {
+            if (!currencyFailed) Services.Log.Warning(ex, "Market Ledger couldn't read your currencies: the rest of what you hold is still sent");
+            currencyFailed = true;
+        }
         record.TryGetValue(me, out var mine);
         if (mine?.Saddlebag is { } sb) places.Add(new Place(SaddlebagPlace, "saddlebag", sb.Items));
         var seen = new HashSet<ulong>();

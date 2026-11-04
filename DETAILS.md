@@ -293,7 +293,9 @@ kind). Read from (FFXIVClientStructs, `FFXIVClientStructs/FFXIV/Client/Game/`):
 
 A currency read in two of these is counted once (the larger: it's the same balance); gil (item 1, said in
 `ml_plugin_hello`), id 0 and nothing held are left out; each amount is at most 100,000,000, and 200
-currencies at most (the lowest ids), as the site keeps them. **Not checked in the game yet**: which
+currencies at most (the lowest ids), as the site keeps them. Should reading them throw, only the
+currencies are left out (said once in the log): the bags, saddlebags and retainers are still sent.
+**Not checked in the game yet**: which
 items the Currency container and the buckets hold is as FFXIVClientStructs' notes and other plugins
 (GatherBuddy Reborn's vendor currencies) say.
 
