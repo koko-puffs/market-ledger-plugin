@@ -1,0 +1,48 @@
+name: Build
+
+# Every push and pull request: run the tests and build the plugin against the current Dalamud,
+# keeping the packaged zip as an artifact (handy for trying a branch as a dev plugin).
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']
+  pull_request:
+
+# Only reads: it builds and tests, and keeps the zip as an artifact.
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Download Dalamud
+        shell: bash
+        run: |
+          mkdir -p "$HOME/dalamud"
+          curl -fsSL https://goatcorp.github.io/dalamud-distrib/latest.zip -o dalamud.zip
+          unzip -q dalamud.zip -d "$HOME/dalamud"
+          echo "DALAMUD_HOME=$HOME/dalamud/" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: dotnet test MarketLedger.Tests/MarketLedger.Tests.csproj -c Release
+
+      - name: Build
+        run: dotnet build MarketLedger.sln -c Release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MarketLedger
+          path: MarketLedger/bin/x64/Release/MarketLedger/latest.zip
+          if-no-files-found: error

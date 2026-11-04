@@ -1,0 +1,157 @@
+name: Release
+
+# Push a tag like v0.2.0 (or run it by hand from the Actions tab with a version) and this builds
+# the plugin against the current Dalamud, runs the tests, zips it with DalamudPackager, makes a
+# GitHub release with the zip, and points repo.json (the custom plugin repository) at it.
+#
+# Needs: Settings → Actions → General → Workflow permissions → "Read and write permissions",
+# so it can create the release and push the updated repo.json to main.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.2.0 (a tag v0.2.0 is created)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Dalamud's release builds. For a game patch's testing period, stg/latest.zip has the next API.
+  DALAMUD_ZIP: https://goatcorp.github.io/dalamud-distrib/latest.zip
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Run by hand, it builds main whichever branch it was started from; pushed as a tag, the
+      # tag's own commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+
+      - name: The commit being released
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        # The typed version comes in through the environment, never pasted into the script
+        # (where a version like 1.0.0"; cmd; " would run cmd).
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            raw="$INPUT_VERSION"
+          else
+            raw="${GITHUB_REF_NAME}"
+          fi
+          raw="${raw#v}"
+          if ! [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::'$raw' isn't a version like 1.2.3"; exit 1
+          fi
+          # Dalamud compares four-part versions.
+          parts=$(echo "$raw" | tr '.' '\n' | wc -l)
+          full="$raw"; [ "$parts" -eq 3 ] && full="$raw.0"
+          echo "tag=v$raw" >> "$GITHUB_OUTPUT"
+          echo "assembly=$full" >> "$GITHUB_OUTPUT"
+
+      - name: Download Dalamud
+        shell: bash
+        run: |
+          mkdir -p "$HOME/dalamud"
+          curl -fsSL "$DALAMUD_ZIP" -o dalamud.zip
+          unzip -q dalamud.zip -d "$HOME/dalamud"
+          echo "DALAMUD_HOME=$HOME/dalamud/" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: dotnet test MarketLedger.Tests/MarketLedger.Tests.csproj -c Release
+
+      - name: Build
+        run: dotnet build MarketLedger.sln -c Release -p:Version=${{ steps.version.outputs.assembly }}
+
+      - name: Collect the zip
+        id: zip
+        shell: bash
+        run: |
+          out=$(find MarketLedger/bin -path '*Release/MarketLedger/latest.zip' | head -n 1)
+          manifest=$(dirname "$out")/MarketLedger.json
+          [ -f "$out" ] && [ -f "$manifest" ] || { echo "::error::DalamudPackager's latest.zip wasn't found"; exit 1; }
+          cp "$out" MarketLedger.zip
+          cp "$manifest" built-manifest.json
+          echo "api=$(python3 -c "import json;print(json.load(open('built-manifest.json'))['DalamudApiLevel'])")" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Market Ledger ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ steps.commit.outputs.sha }}
+          files: MarketLedger.zip
+          generate_release_notes: true
+          make_latest: true
+
+      - name: Point repo.json at the release
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSEMBLY: ${{ steps.version.outputs.assembly }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The tag's commit is checked out; repo.json is updated on main.
+          git fetch origin main
+          git checkout -B main origin/main
+          python3 - <<'PY'
+          import json, os, time
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["TAG"]
+          link = f"https://github.com/{repo}/releases/download/{tag}/MarketLedger.zip"
+          built = json.load(open("built-manifest.json"))
+          entries = json.load(open("repo.json"))
+          # The first release makes the plugin's entry (repo.json starts as an empty list).
+          if not entries:
+              entries.append({})
+          entry = entries[0]
+          # Everything the packager wrote (name, description, API level…), then the links.
+          for key in ("Author", "Name", "InternalName", "Punchline", "Description", "ApplicableVersion",
+                      "RepoUrl", "Tags", "CategoryTags", "DalamudApiLevel", "LoadPriority", "IconUrl",
+                      "AcceptsFeedback"):
+              if key in built:
+                  entry[key] = built[key]
+          entry["AssemblyVersion"] = os.environ["ASSEMBLY"]
+          entry["TestingAssemblyVersion"] = os.environ["ASSEMBLY"]
+          entry["DownloadLinkInstall"] = link
+          entry["DownloadLinkUpdate"] = link
+          entry["DownloadLinkTesting"] = link
+          entry["LastUpdate"] = int(time.time())
+          entry.setdefault("IsHide", False)
+          entry.setdefault("IsTestingExclusive", False)
+          with open("repo.json", "w", encoding="utf-8") as f:
+              json.dump(entries, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+          PY
+          git add repo.json
+          if git diff --cached --quiet; then
+            echo "repo.json already points at ${TAG}"
+          else
+            git commit -m "repo.json: ${TAG}"
+            git push origin main
+          fi

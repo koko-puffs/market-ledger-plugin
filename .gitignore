@@ -1,0 +1,11 @@
+# Build output
+bin/
+obj/
+*.user
+.vs/
+.idea/
+TestResults/
+
+# A parent folder may ignore solutions; this one's is part of the project.
+!*.sln
+.claude/worktrees/

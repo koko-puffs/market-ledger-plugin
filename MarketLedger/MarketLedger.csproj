@@ -1,0 +1,31 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <!--
+    Dalamud.NET.Sdk sets the target framework (net10.0-windows), x64, nullable, unsafe code, and
+    references Dalamud, ImGui, Lumina and FFXIVClientStructs from your Dalamud install
+    (%AppData%\XIVLauncher\addon\Hooks\dev, or DALAMUD_HOME). DalamudPackager writes the manifest
+    from MarketLedger.json and, in Release, zips the plugin to bin\x64\Release\MarketLedger\latest.zip.
+  -->
+  <PropertyGroup>
+    <Version>0.1.0.0</Version>
+    <AssemblyName>MarketLedger</AssemblyName>
+    <RootNamespace>MarketLedger</RootNamespace>
+    <Description>Plan what to make for gil on kokos-tools.com; let Artisan and GatherBuddy Reborn make it.</Description>
+    <PackageProjectUrl>https://github.com/koko-puffs/market-ledger-plugin</PackageProjectUrl>
+    <IsPackable>false</IsPackable>
+    <!-- Lets the project build (for checking) on Linux and macOS too; it only runs in the game on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The theme's fonts travel inside the DLL. -->
+    <EmbeddedResource Include="Resources\Fonts\*.ttf" />
+    <!-- The plugin's licence and the fonts' (the OFL asks for its text to travel with the fonts). -->
+    <Content Include="..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <Content Include="Resources\Fonts\OFL-*.txt" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
+    <!-- The installer shows images\icon.png for dev builds. -->
+    <Content Include="images\icon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>images\icon.png</Link>
+    </Content>
+  </ItemGroup>
+</Project>

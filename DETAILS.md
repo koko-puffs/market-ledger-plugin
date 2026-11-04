@@ -1,0 +1,295 @@
+# Market Ledger (Dalamud plugin): the details
+
+How the plugin works, where things are, and why. The site's side (the planner that writes a run,
+the database functions, the pages) is in kokos-tools' DETAILS.md, under Market Ledger; the shapes
+both sides share are the site's `src/features/market-ledger/model/types.ts` and this plugin's
+`MarketLedger/Core/RunFile.cs`.
+
+## The idea
+
+The site works out what's worth making for gil (prices, your levels, what you hold) and writes it
+as a **run**: steps in order, each with the items it gets and how many must be in your bags once
+it's done. The plugin carries a run out, but it does the work itself only where nobody else does:
+it asks the plugins you already use. **Artisan** crafts, **GatherBuddy Reborn** gathers,
+**Lifestream** travels and **vnavmesh** walks; the plugin's own clicks take things from your
+retainers at a summoning bell, buy from vendors and on the market board, and entrust what was made
+(Housing Studio's plugin's errand code, which recorded each of those clicks in the game). Only one
+of them drives at a time. Every step's progress is read from your bags, so a step stopped halfway
+starts again from what your bags hold, and the site sees the same numbers.
+
+The other way round, the plugin tells the site who you are (your crafting and gathering jobs'
+levels, gil, free slots), what you hold, and what your retainers list and sell.
+
+## Things to know before using it
+
+- **It drives your character and spends gil.** It moves you, teleports, visits other worlds, talks
+  to NPCs, buys and takes from retainers. Nothing is bought above a line's price (`maxPrice` on the
+  market, the vendor's price) or past the gil agreed on the site when the run was sent (`maxGil`),
+  your own market ceiling, or your gil; every purchase question is checked against the price
+  chosen before it's answered. It pauses on anything it didn't expect.
+- **Automation is against Square Enix's terms of service**, like every third-party tool, and this
+  one acts in the game. Use it where you're happy to; don't talk about it in the game.
+- **Nothing of it has been tried in the game yet.** It compiles against Dalamud 15 and its Core is
+  unit-tested; the clicks come from Housing Studio's plugin, where they were recorded working, but
+  this plugin's runs are new. The clicks not yet seen working anywhere (opening a retainer's item
+  menu, entrusting) hold the run until you press Resume, until you turn on **Trust the new clicks**.
+
+## A run (`Core/RunFile.cs`)
+
+The run file mirrors types.ts exactly, in camelCase JSON: `format` "market-ledger-run", `version`
+1, `id` (the site's uuid), `name`, `createdAt`, `character`, `targets`, `maxGil`, `steps`,
+`estimate`. Each step has an `id` and a `kind`:
+
+| kind | lines | done by |
+| --- | --- | --- |
+| `withdraw` | item, amount, need, `retainer` (a retainer's name, or "Saddlebag") | the plugin, at a bell |
+| `vendor` | item, amount, need, `price`, `npc`, `zone` | Lifestream, vnavmesh, the plugin |
+| `market` | item, amount, need, `maxPrice`, `world` (null: any), `hq` | Lifestream, vnavmesh, the plugin |
+| `gather` | item, amount, need, `job`, `zone`, `timed` (spawns, duration) | GatherBuddy Reborn |
+| `craft` | one `line`, with `recipe`, `job`, `crafts` | Artisan |
+| `entrust` | item, amount, need (what's **left** in your bags after) | the plugin, at a bell |
+
+`RunFile.Parse` checks it all and says in words what's wrong (another format or version, a kind it
+doesn't know, a recipe Artisan can't take (above 65,535), two steps with one id, a line with no item
+or count). `RunProgress` is what goes back (`status`, `step`, `steps[{id, state, done, of, note}]`,
+`spent`, `startedAt`, `updatedAt`, the newest 40 `log` lines newest first, `message`); statuses and
+states are written in the site's lower-case words (`RunWords`).
+
+**The counts** (`Core/Steps.cs`, `StepMath`, tested). A line's `need` is how many of the item must be
+in your bags once its step is done (for an entrust line, how many are left after); `amount` is how
+many the step itself gets. So done = what's in your bags past `need − amount` (for entrust, what's
+gone below `need + amount`), and a step is done when every line's need is met. A craft's syntheses
+left are what's missing over its yield (`amount ÷ crafts`), never more than the step planned. "In
+your bags" counts HQ with NQ, as the site counts a need; a market line that wants HQ (`hq: true`) buys
+HQ listings only, and one without `hq` takes either.
+
+## The run (`Session/RunEngine*.cs`)
+
+Steps on the framework thread, one `Tick` a frame, as Housing Studio's errand runner does.
+
+- **Start** (from the window, the HUD, or the inbox) checks you're logged in and free, and that the
+  helpers the run needs are installed; a run already in hand is stopped first (the window asks you).
+  AutoRetainer is held (its "suppressed" state) when Settings → Hold AutoRetainer is on, and let be
+  when the run ends.
+- **Each step**: if your bags already have it, it's done at once. Otherwise:
+  - *gather* and *craft* are handed to their plugin (below), and watched.
+  - *withdraw*, *vendor*, *market* and *entrust* are lists of parts (getting to a bell, opening a
+    retainer, buying one line…), each part small actions in a `StepQueue` (`Core/StepQueue.cs`, from
+    Housing Studio): every wait has a timeout, every click is logged, at least 0.3 s between clicks.
+    When the parts are through and a line is still short, the run pauses and says what's short.
+- **Pause** (you, the site, `/ledger pause`, or anything unexpected) stops whatever the step started
+  (walking, travel, auto-gather, Artisan's Endurance) and closes the windows it opened; **Resume**
+  starts the step again from your bags. While the run **waits for you** (a click not yet seen working,
+  a list to import into GatherBuddy Reborn, something to do by hand), Resume is the go-ahead.
+  **Skip** marks the step skipped and goes on. **Stop** ends the run and lets go of everything.
+- **A craft that falls short** (Artisan stops with fewer made than needed, or makes none: the site
+  leaves out materials nobody can get) marks its step failed with a note and the run goes on; the
+  end says how many steps fell short.
+- **Safety, every frame**: combat, a duty or a duty pop, a cutscene, logging out, being knocked out,
+  a zone change no travel asked for (gathering may change zones: GatherBuddy Reborn travels) pause
+  the run with the reason. A tell pauses it (Settings → Pause on a tell, on by default). Bags: no
+  purchase or retrieve that would eat into the slots you keep free (Settings, 5 by default), and
+  gathering pauses when your bags come down to them. Before each purchase: your gil, the run's gil
+  left (`maxGil` less everything spent), your market ceiling (Settings, 0: none), the line's own
+  gil (its amount at `maxPrice`, tax included); after it, what was really spent (a listing dearer
+  than shown pauses the run).
+- **The site's commands** (pause, resume, skip, stop), from `ml_plugin_run_update`'s answer (the
+  site hands each over once), are obeyed when Settings → Let the site pause and stop is on.
+
+### Gathering (`RunEngine.Helpers.cs`, `Ipc/GatherBuddy.cs`)
+
+GatherBuddy Reborn's auto-gather gathers from its enabled **auto-gather lists**; a list's quantity is
+how many to own in all (`AutoGather.Gather.cs`: it gathers while `GetTotalCount() < Quantity`), which
+is what a run line's `need` is. What its IPC offers decides how the list gets there:
+
+- **With list IPC** (the fork HenryBaylis/GatherBuddyReborn, branch `feature/autogather-list-ipc`, its
+  IpcVersion 5; found by asking `GetAutoGatherLists`): the plugin makes a list for the run ("Market
+  Ledger · <run>", `SetAutoGatherList` with item → need), turns your own enabled lists off meanwhile,
+  turns the run's on (`SetAutoGatherListEnabled`; GatherBuddy's own perception and bait checks may
+  refuse, and the run pauses saying so), then auto-gather on (`SetAutoGatherEnabled(true)`). When the
+  run ends the list is deleted and your lists are turned back on.
+- **Without** (upstream GatherBuddy Reborn today, IpcVersion 2: auto-gather on/off and its status, no
+  lists): the step waits for you with the list as text to copy, in the TeamCraft format its Auto-Gather
+  tab's **Import from TeamCraft** reads ("280x Ra'Kaznar Ore", one a line). You make a list, import it,
+  leave only it on, and press Resume; the plugin turns auto-gather on. The Helpers tab says which way
+  it's going. (Its `/gather` commands only mark a node and teleport; they don't gather a count, so
+  they're not used.)
+
+Then the plugin watches your bags: done when every line's need is met (auto-gather off). Auto-gather
+waiting (`IsAutoGatherWaiting`: a timed node's window isn't open) shows as the run *waiting*, with
+the window's Eorzea time when the line has one ("Waiting for Claro Walnut Log's window at 16:00 ET
+(in 4 min)"); auto-gather turning itself off for 5 s with lines still short pauses the run with
+GatherBuddy's own status. GatherBuddy's status lines go to the run's log as they change.
+
+### Crafting (`RunEngine.Helpers.cs`, `Ipc/Artisan.cs`)
+
+Auto-gather off first; Artisan idle first (`IsBusy`, waited for up to 3 minutes). Then
+`Artisan.CraftItem(recipe, syntheses left)`, which selects the recipe and starts its Endurance mode
+for that many. Watched through your bags; Artisan going idle for 4 s with the line short ends the step
+as fallen short (above). Pausing or stopping uses `SetEnduranceStatus(false)` (the craft under way
+finishes). `GetStopRequest` is read: true (Artisan entering a duty, or another plugin asked) pauses
+the run. **Why not `SetStopRequest` to stop it**: in Artisan's source (`IPC.cs`, `StopCraftingRequest`)
+setting it true turns Endurance off, the same as `SetEnduranceStatus(false)`, but the flag stays set,
+and setting it back to false *resumes* crafting (`ResumeCrafting`), and Artisan clears it by itself
+after a duty when you have "resume after duty" on: a stop request left behind could start the
+run's recipe again later. So the plugin stops Endurance directly.
+
+### Retainers (`RunEngine.Retainers.cs`)
+
+A summoning bell within 60 yalms, else Limsa Lominsa's (its aetheryte, Hawkers' Alley), walked to.
+AutoRetainer held (and, if it's mid-cycle, waited for up to 15 s). The bell, the retainer by name in
+its list (`RetainerList` [i:2, u:row]), their greeting clicked through, **Entrust or withdraw
+items**, then for each line each stack's item menu and **Retrieve from Retainer** (the whole stack,
+never "Retrieve Quantity"), until the line's need is met or the retainer has none left. Withdraw lines
+naming the saddlebags ("Saddlebag", the place name the plugin reports) wait for you to take them
+out by hand (their window isn't one the plugin drives). Entrust goes to the first retainer in the
+bell's list: each whole stack whose size doesn't take the bags below the line's need, from your bag
+window's item menu, **Entrust to Retainer**; a stack bigger than what should go is left for you.
+Opening a retainer's item menu and entrusting are guesses (held for you until trusted); done by hand
+meanwhile, the run notices (the count moved) and carries on.
+
+### Vendors and the market (`RunEngine.Buying.cs`, `Game/Vendors.cs`)
+
+**Vendors**: the game's gil shops and who sells what are read once in the background when the plugin
+loads (`Vendors`, from Housing Studio's VendorData: GilShopItem, each NPC's ENpcData through
+TopicSelect, PreHandler and CustomTalk, their Level spots, and the residential wards' layout files for
+the housing districts' vendors; items behind a quest or achievement left out). A vendor line goes to
+the NPC and zone the site named when one matches, else the cheapest NPC somewhere known outside the
+residential districts, then in them, whose aetheryte you've attuned to. Lifestream teleports there
+(or, for a residential district, its city's Residential District Aethernet to ward 1), vnavmesh walks
+to them, the plugin talks to them, picks the shop in their menu by name, and buys in lots of up to 99
+(`Shop` [i:0, row, count, empty]), the yes/no answered only when it names the price and the item.
+
+**The market**: lines grouped by world (yours, and "any", first); for another world, Lifestream's
+world visit from Limsa's aetheryte, and back to your home world after. Limsa's boards, the board
+searched by the item's name (`ItemSearch` [i:9, …, s:name, s:name, …]), its listings opened and
+checked to be that item's, read as the game receives them (Dalamud's market board service,
+`Game/BoardListings.cs`), and bought cheapest first while `MarketRule.WhyNot` allows (`Core/Market.cs`,
+tested), each purchase's question checked to name the listing's cost (`BoardQuestionMatches`). A
+listing gone before the question came is passed for the next, three times at most.
+
+## Helpers (`Ipc/*.cs`, `LedgerSession.CheckHelpers`)
+
+One wrapper per plugin; every call goes through `IpcGuard` (`Core/IpcCheck.cs`, tested): not
+installed, another version's signature or a throw mean "can't", and each call's first failure is
+logged once (at debug). The Helpers tab shows each: installed (Dalamud's installed plugins, by
+internal name), its version, and how its IPC answered (`HelperIpc`: No, Partly, Ok, from a probe of
+its read-only calls); checked when the plugin loads, every 30 s while no run goes, and on "Check again".
+
+The IPC names, verified in each plugin's source (clones of 3–4 Nov 2026):
+
+| plugin (internal name) | calls used | where in its source |
+| --- | --- | --- |
+| Artisan (`Artisan`) | `Artisan.CraftItem` (ushort recipe, int amount), `Artisan.IsBusy` → bool, `Artisan.IsListRunning` → bool, `Artisan.IsListPaused` → bool, `Artisan.SetListPause` (bool), `Artisan.GetEnduranceStatus` → bool, `Artisan.SetEnduranceStatus` (bool), `Artisan.GetStopRequest` → bool | `Artisan/IPC/IPC.cs`, `IPC.Init`, lines 41–52 (commit a6118e6). `SetStopRequest` (line 49) exists and isn't used (above). |
+| GatherBuddy Reborn (`GatherBuddyReborn`) | `GatherBuddyReborn.Version` → int, `.IsAutoGatherEnabled` → bool, `.SetAutoGatherEnabled` (bool), `.IsAutoGatherWaiting` → bool, `.GetAutoGatherStatusText` → string | `GatherBuddy/Plugin/GatherBuddyIpc.cs` (published by its EzIPC, `Plugin/EzIpc.cs`, prefix its InternalName; upstream main, commit a204f2f) |
+| … with list IPC | `.GetAutoGatherLists` → Dictionary&lt;string, bool&gt;, `.SetAutoGatherList` (string, Dictionary&lt;uint, uint&gt;, string?) → int, `.SetAutoGatherListEnabled` (string, bool) → bool, `.DeleteAutoGatherList` (string) → bool | the same file on HenryBaylis/GatherBuddyReborn `feature/autogather-list-ipc` (commit 240b220), and `AutoGather/Lists/AutoGatherListsManager.External.cs` |
+| vnavmesh (`vnavmesh`) | `vnavmesh.Nav.IsReady`, `.SimpleMove.PathfindAndMoveTo` (Vector3, bool) → bool, `.SimpleMove.PathfindInProgress`, `.Path.IsRunning`, `.Path.Stop`, `.Nav.PathfindCancelAll` (only while a path is being worked out: it reloads the mesh) | `vnavmesh/IPCProvider.cs`, lines 17, 25, 42–43, 53, 55 (commit 6fc8072) |
+| Lifestream (`Lifestream`) | `Lifestream.Teleport` (uint, byte) → bool, `.AethernetTeleport` (string) → bool, `.ChangeWorld` (string) → bool, `.CanVisitSameDC` (string) → bool, `.GoToHousingAddress` (AddressBookEntryTuple), `.IsBusy` → bool, `.Abort`, `.ExecuteCommand` (string; the "/li" fallback) | `Lifestream/IPC/IPCProvider.cs`, lines 35, 59, 65, 71, 78, 102, 139, 241 (commit b363201); the tuple in `Lifestream/Data/AddressBookEntry.cs` |
+| AutoRetainer (`AutoRetainer`) | `AutoRetainer.GetSuppressed` → bool, `.SetSuppressed` (bool), `.GetOfflineCharacterData` (ulong) → its object (read by name: `RetainerData`, `Name`, `RetainerID`), `AutoRetainer.PluginState.IsBusy` → bool | `AutoRetainer/Modules/IPC.cs` lines 22–23, 27; `Modules/EzIPCManagers/IPC_PluginState.cs` line 15 (commit cc020df). It has no IPC to entrust or withdraw. Housing Studio's plugin asks "AutoRetainer.IsBusy", which isn't published. |
+| Allagan Tools (`InventoryTools`) | `AllaganTools.IsInitialized` → bool, `.GetCharactersOwnedByActive` (bool) → HashSet&lt;ulong&gt;, `.GetCharacterItems` (ulong) → HashSet&lt;ulong[]&gt; | `InventoryTools/IPC/IPCService.cs`, lines 571–593 (commit 70a9f41) |
+
+## The site (`Core/SiteRpc.cs`, `Core/SiteLink.cs`, `Session/SiteSync.cs`)
+
+Linked with a token from the site (Settings → Market Ledger → The plugin): "mlp_" and 43 letters,
+kept in the plugin's settings, never logged, sent only in the body of a POST to
+`https://upjcxjuuzxujqddtwehn.supabase.co/rest/v1/rpc/<function>` with the site's publishable key (as
+Raid Planner's plugin does). Only `ml_plugin_[a-z_]+` functions are ever called. A refusal is shown in
+the site's own words when its hint is one written for players (`token`, `off`, `rate`, `size`, `run`,
+`data`); `token` (and `off`) turn the link to Refused until you link again; `rate` holds that kind of
+call for 2 minutes; `run` on a run's update stops sending that run's progress (it isn't the site's any
+more); sales or listings refused as `data` or `size` aren't sent again. Calls run off the framework
+thread, one of each kind at a time, waiting longer after each failure (5 s doubling to 5 minutes), and
+paced under the site's hourly limits for a person (hello 240, holdings 240, inbox 720, run_update
+3,600, sales 240, listings 480): at most 180, 30, 600, 1,800, 240 and 450 an hour.
+
+| function | when | what |
+| --- | --- | --- |
+| `ml_plugin_hello` (p_character) | logging in, another character, every 10 minutes | `{ key, name, world, dc, jobs, gil, freeSlots }`; its `account` is shown as linked |
+| `ml_plugin_holdings` (p_key, p_items, p_places) | when what you hold changes, at most every 2 minutes | totals, and each place `{ place, kind, items }`: Bags, Crystals, Saddlebag (as last seen), each retainer (as last seen open, else Allagan Tools' count; 12 at most, the ones seen most lately) |
+| `ml_plugin_inbox` | every 30 s; every 6 s while a run is in hand | the runs sent (read and checked: one that can't be read is logged and left out); a pending command it shows for the run in hand makes the next run update go at once |
+| `ml_plugin_run_update` (p_run, p_status, p_progress) | each change (at most every 2 s), every 15 s while running, and once at the end (repeated until it's taken) | `RunProgress`, the status never `sent` or `draft`; its answer's `command` (handed over once there) is obeyed |
+| `ml_plugin_sales` (p_key, p_sales) | a retainer's sale history window read with new sales | `[{ retainer, item, hq, quantity, price, at }]`, at most 500 a call, each sale once (by its key) |
+| `ml_plugin_listings` (p_key, p_retainer, p_items) | a retainer's sell list read and changed | `[{ item, hq, quantity, price }]` |
+
+**The character's key** is the SHA-256 of "market-ledger:", the content id and this install's own
+random salt (made once, kept in the settings), as 32 hex letters: the site never sees a content id.
+**Jobs** are the eight crafters' and three gatherers' levels (`IPlayerState.GetClassJobLevel`), a job
+not unlocked left out.
+
+**What retainers hold** (`Game/HoldingsReader.cs`): whenever a retainer's inventory window is open its
+seven pages are counted (HQ and collectable copies as the item), and the saddlebags whenever the game
+has them; kept per character in `holdings.json` in the plugin's config folder, so they're still known
+after a restart. Allagan Tools' counts fill in retainers not seen, named from the game's retainer
+list or AutoRetainer's (a count it can't name, a company chest say, is left out).
+
+**Listings** (`Game/RetainerMarket.cs`): while the retainer's sell list (`RetainerSellList`) is open,
+the game's `RetainerMarket` container and each slot's price (`InventoryManager.GetRetainerMarketPrice`),
+as Allagan Market reads them. **Sales**: while the retainer's sale history (`RetainerHistory`) is open.
+Neither FFXIVClientStructs nor Dalamud describe that window, so its rows are found in its values by
+their shape (`Core/Ledger.cs`, `SaleHistory`, tested on a made-up layout): an item's name (with the
+game's HQ mark), then a price, a quantity and a time in seconds since 1970. **Not checked in the game
+yet**: when the window's open and nothing reads, its values go to the log once (`/xllog`), to fix the
+reader from.
+
+## The windows (`UI/`)
+
+Written by the UI side against `Session/LedgerSession.cs`: `Link` (Unlinked, Linking,
+Linked(account), Refused(why)), `Inbox` (the runs sent, oldest first, "later" ones last), `Current`
+(the run in hand as a `RunState`: file, status, step, each step's progress with its label, kind and
+who does it, gil spent, the log, the message, what's being done now, about how long is left, whether
+it's held for you, text to copy), `Helpers`, `Character`, and `Start`, `Pause`, `Resume`, `Stop`,
+`SkipStep`, `Later`, `CheckHelpers`, `Refresh` (reads the token again). The main window (Home, Run,
+Helpers, Settings) and a small HUD over the game while a run goes.
+
+## Settings (`Configuration.cs`)
+
+Token; Pause on a tell (on); Keep free bag slots (5); Market ceiling (0: only the run's gil); Trust
+the new clicks (off); Hold AutoRetainer (on); Show the HUD (on); Let the site pause and stop (on);
+Say pauses and stops in chat (on). The character key's salt.
+
+## Commands
+
+`/ledger` (or `/marketledger`) opens the window; `/ledger stop`, `/ledger pause`, `/ledger resume`;
+`/ledger settings`.
+
+## Layout
+
+- `Core/`: game-free, unit-tested (`MarketLedger.Tests` compiles these files directly, without
+  Dalamud): the run file and progress, the counts, the market rule, pacing, the site's calls and
+  token, holdings and sales, the IPC guard, Eorzea time, the step queue and window calls.
+- `Game/`: reading and doing in the game (bags, retainers, vendors, the board's listings, the
+  player, movement).
+- `Automation/`: the windows and clicks, with where each came from (`ErrandTable`, `UiTable`,
+  `GameUi`).
+- `Ipc/`: one wrapper per helper plugin.
+- `Session/`: the run (`RunEngine*`), the site (`SiteSync`), and the façade the windows read
+  (`LedgerSession`, `LedgerTypes`).
+- `UI/`: the windows and the house UI kit (Geist fonts, embedded).
+
+## Developing
+
+```sh
+dotnet test MarketLedger.Tests/MarketLedger.Tests.csproj   # anywhere .NET 10 is
+dotnet build MarketLedger.sln -c Release                   # needs Dalamud (DALAMUD_HOME, or XIVLauncher's dev folder)
+# → MarketLedger/bin/x64/Release/MarketLedger/latest.zip
+```
+
+CI (`.github/workflows/build.yml`) downloads the current Dalamud, runs the tests and builds on every
+push; `release.yml` releases a tag (see `docs/PUBLISHING.md`). `repo.json` is `[]` until the first
+release, which makes its entry.
+
+## Not yet
+
+- Repricing your listings stays a suggestion on the site.
+- A run picked up again after the plugin reloads (the site keeps it as running; the plugin starts
+  afresh from the inbox).
+- Words are matched in English only (menus, objects' names, the sale history's item names).
+- The sale history reader and the entrust clicks are unconfirmed in the game.
+
+## Release notes
+
+### 0.1.0
+
+The first version: runs from the site carried out step by step with Artisan, GatherBuddy Reborn,
+Lifestream and vnavmesh; retainers, vendors and the market board by the plugin's own clicks; your
+character, holdings, listings and sales sent to the site.
