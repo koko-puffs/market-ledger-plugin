@@ -32,17 +32,17 @@ public static class Palette
     public static readonly Vector4 Faint = Hex(0x5e5e66);                  // what hardly needs reading
 
     // Gil gold: what goes ahead, what's live, the tool's own icons.
-    public static readonly Vector4 Gold = Hex(0xffc53d);
-    public static readonly Vector4 GoldHover = Hex(0xffd060);
-    public static readonly Vector4 GoldSoft = Hex(0xffd978);               // gold words on the dark
-    public static readonly Vector4 GoldText = Hex(0xffd978);               // gold notes
+    public static readonly Vector4 Gold = Hex(0xffcd3d);
+    public static readonly Vector4 GoldHover = Hex(0xffd662);
+    public static readonly Vector4 GoldSoft = Hex(0xffde78);               // gold words on the dark
+    public static readonly Vector4 GoldText = Hex(0xffde78);               // gold notes
     public static readonly Vector4 GoldDeep = Hex(0xc9961f);               // a progress bar's fill inside a table
     public static readonly Vector4 GoldDim = Hex(0x8a6a1e);                // the step strip's step under way, not lit
     public static readonly Vector4 OnGold = Hex(0x1a1300);                 // ink on the gold
     public static readonly Vector4 GoldWash = Hex(0x141005);               // a live box's fill (the gold at 7% on black)
     public static readonly Vector4 GoldTile = Hex(0x2a2412);               // the round wells behind its icons
-    public static readonly Vector4 GoldPicked = Rgba(255, 197, 61, 0.16f);
-    public static readonly Vector4 GoldRow = Rgba(255, 197, 61, 0.07f);    // the step under way in the table
+    public static readonly Vector4 GoldPicked = Rgba(255, 205, 61, 0.16f);
+    public static readonly Vector4 GoldRow = Rgba(255, 205, 61, 0.07f);    // the step under way in the table
     public static readonly Vector4 GoldEdge = Hex(0x5a4516);               // a live box's edge (the gold at 35% on black)
 
     // Gains and losses.
@@ -57,7 +57,7 @@ public static class Palette
     public static readonly Vector4 Success = Hex(0x5ee6a8);
     public static readonly Vector4 SuccessWash = Rgba(94, 230, 168, 0.1f);
     public static readonly Vector4 SuccessEdge = Rgba(94, 230, 168, 0.4f);
-    public static readonly Vector4 Warn = Hex(0xffd978);                   // "partly": gold words, not red
+    public static readonly Vector4 Warn = Hex(0xffde78);                   // "partly": gold words, not red
 
     // Lines.
     public static readonly Vector4 LineFaint = Rgba(255, 255, 255, 0.06f); // dividers in boxes, hover fills
