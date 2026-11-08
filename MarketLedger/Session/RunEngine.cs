@@ -35,6 +35,16 @@ public sealed partial class RunEngine : IDisposable
 
     private const float NpcReach = 2f;
 
+    /// <summary>
+    /// How near is near enough to talk to someone or use something when vnavmesh can't get closer (an NPC
+    /// behind a counter): yalms across, centre to centre (as Housing Studio's plugin 1.0.4).
+    /// </summary>
+    private const float TalkFrom = 4.5f;
+
+    /// <summary>Within <paramref name="across"/> yalms across and 2.5 up or down.</summary>
+    private static bool CloseEnough(Vector3 a, Vector3 b, float across) =>
+        Vector2.Distance(new Vector2(a.X, a.Z), new Vector2(b.X, b.Z)) <= across && MathF.Abs(a.Y - b.Y) <= 2.5f;
+
     /// <summary>A gil shop sells at most this many in one purchase.</summary>
     private const int MaxPerPurchase = 99;
 

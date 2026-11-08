@@ -6,7 +6,7 @@
     from MarketLedger.json and, in Release, zips the plugin to bin\x64\Release\MarketLedger\latest.zip.
   -->
   <PropertyGroup>
-    <Version>0.1.0.0</Version>
+    <Version>0.1.2.0</Version>
     <AssemblyName>MarketLedger</AssemblyName>
     <RootNamespace>MarketLedger</RootNamespace>
     <Description>Plan what to make for gil on kokos-tools.com; let Artisan and GatherBuddy Reborn make it.</Description>

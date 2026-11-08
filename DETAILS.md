@@ -190,7 +190,9 @@ the housing districts' vendors; items behind a quest or achievement left out). A
 the NPC and zone the site named when one matches, else the cheapest NPC somewhere known outside the
 residential districts, then in them, whose aetheryte you've attuned to. Lifestream teleports there
 (or, for a residential district, its city's Residential District Aethernet to ward 1), vnavmesh walks
-to them, the plugin talks to them, picks the shop in their menu by name, and buys in lots of up to 99
+to them (the path ending within reach, `PathfindAndMoveCloseTo`; one behind a counter, whose own spot the
+floor doesn't reach, is talked to from within 4.5 yalms, after a walk to the nearest floor that reaches
+it, `NearestPointReachable`; a walk not moving for 12 s is asked again), the plugin talks to them, picks the shop in their menu by name, and buys in lots of up to 99
 (`Shop` [i:0, row, count, empty]), the yes/no answered only when it names the price and the item.
 
 **The market**: lines grouped by world (yours, and "any", first); for another world, Lifestream's
@@ -217,7 +219,7 @@ The IPC names, verified in each plugin's source (clones of 3–4 Nov 2026):
 | Artisan (`Artisan`) | `Artisan.CraftItem` (ushort recipe, int amount), `Artisan.IsBusy` → bool, `Artisan.IsListRunning` → bool, `Artisan.IsListPaused` → bool, `Artisan.SetListPause` (bool), `Artisan.GetEnduranceStatus` → bool, `Artisan.SetEnduranceStatus` (bool), `Artisan.GetStopRequest` → bool | `Artisan/IPC/IPC.cs`, `IPC.Init`, lines 41–52 (commit a6118e6). `SetStopRequest` (line 49) exists and isn't used (above). |
 | GatherBuddy Reborn (`GatherBuddyReborn`) | `GatherBuddyReborn.Version` → int, `.IsAutoGatherEnabled` → bool, `.SetAutoGatherEnabled` (bool), `.IsAutoGatherWaiting` → bool, `.GetAutoGatherStatusText` → string | `GatherBuddy/Plugin/GatherBuddyIpc.cs` (published by its EzIPC, `Plugin/EzIpc.cs`, prefix its InternalName; upstream main, commit a204f2f) |
 | … with list IPC | `.GetAutoGatherLists` → Dictionary&lt;string, bool&gt;, `.SetAutoGatherList` (string, Dictionary&lt;uint, uint&gt;, string?) → int, `.SetAutoGatherListEnabled` (string, bool) → bool, `.DeleteAutoGatherList` (string) → bool | the same file on HenryBaylis/GatherBuddyReborn `feature/autogather-list-ipc` (commit 240b220), and `AutoGather/Lists/AutoGatherListsManager.External.cs`. (Upstream's EzIPC publishes functions of at most one argument; the fork's, up to four, which these need.) |
-| vnavmesh (`vnavmesh`) | `vnavmesh.Nav.IsReady`, `.SimpleMove.PathfindAndMoveTo` (Vector3, bool) → bool, `.SimpleMove.PathfindInProgress`, `.Path.IsRunning`, `.Path.Stop`, `.Nav.PathfindCancelAll` (only while a path is being worked out: it reloads the mesh) | `vnavmesh/IPCProvider.cs`, lines 17, 25, 42–43, 53, 55 (commit 6fc8072) |
+| vnavmesh (`vnavmesh`) | `vnavmesh.Nav.IsReady`, `.SimpleMove.PathfindAndMoveTo` (Vector3, bool) → bool, `.SimpleMove.PathfindAndMoveCloseTo` (Vector3, bool, float range) → bool (an older vnavmesh without it: walked to the spot), `.SimpleMove.PathfindInProgress`, `.Query.Mesh.NearestPointReachable` (Vector3, float, float) → Vector3?, `.Path.IsRunning`, `.Path.Stop`, `.Nav.PathfindCancelAll` (only while a path is being worked out: it reloads the mesh) | `vnavmesh/IPCProvider.cs`, lines 17, 25, 37, 42–43, 53–55 (commit 6fc8072; master, November 2026) |
 | Lifestream (`Lifestream`) | `Lifestream.Teleport` (uint, byte) → bool, `.AethernetTeleport` (string) → bool, `.ChangeWorld` (string) → bool, `.CanVisitSameDC` (string) → bool, `.GoToHousingAddress` (AddressBookEntryTuple), `.IsBusy` → bool, `.Abort`, `.ExecuteCommand` (string; the "/li" fallback, only when the call itself isn't there: an answer of false is a no) | `Lifestream/IPC/IPCProvider.cs`, lines 35, 59, 65, 71, 78, 102, 139, 241 (commit b363201); the tuple in `Lifestream/Data/AddressBookEntry.cs` |
 | AutoRetainer (`AutoRetainer`) | `AutoRetainer.GetSuppressed` → bool, `.SetSuppressed` (bool), `.GetOfflineCharacterData` (ulong) → its OfflineCharacterData (subscribed as object: Dalamud hands it over as JSON; `RetainerData`, `Name`, `RetainerID`, fields of AutoRetainerAPI's `Configuration/OfflineCharacterData.cs` and `OfflineRetainerData.cs`), `AutoRetainer.PluginState.IsBusy` → bool | `AutoRetainer/Modules/IPC.cs` lines 22–23, 27; `Modules/EzIPCManagers/IPC_PluginState.cs` line 15 (commit cc020df). It has no IPC to entrust or withdraw. Housing Studio's plugin asks "AutoRetainer.IsBusy", which isn't published. |
 | Allagan Tools (`InventoryTools`) | `AllaganTools.IsInitialized` → bool, `.GetCharactersOwnedByActive` (bool) → HashSet&lt;ulong&gt;, `.GetCharacterItems` (ulong) → HashSet&lt;ulong[]&gt; (each CriticalCommonLib's `InventoryItem.ToNumeric()`: container, slot, item, quantity…) | `InventoryTools/IPC/IPCService.cs`, lines 571–593 (commit 70a9f41); `ToNumeric` in CriticalCommonLib `Models/InventoryItem.cs` line 832 |
@@ -420,6 +422,14 @@ release, which makes its entry.
 - The sale history reader and the entrust clicks are unconfirmed in the game.
 
 ## Release notes
+
+### 0.1.2
+
+Vendors behind a counter: vnavmesh walks up to them from the front (its path ends within reach), and one
+it can't get right up to is talked to from within 4.5 yalms, after a walk to the nearest floor that
+reaches them; the run used to walk at them twice and stop. A summoning bell or a market board behind a
+rail likewise. A walk that hasn't moved for 12 s is stopped and asked again. The same walk as Housing
+Studio's plugin 1.0.4.
 
 ### 0.1.0
 

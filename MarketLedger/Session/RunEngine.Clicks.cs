@@ -441,7 +441,11 @@ public sealed partial class RunEngine
     }
 
     /// <summary>Walks (vnavmesh) to within <paramref name="within"/> yalms of a spot, found when the walk starts.</summary>
-    private List<Step> WalkSteps(string what, Func<Vector3?> where, float within = Reach)
+    /// <param name="talkFrom">
+    /// When vnavmesh can't get that close (an NPC behind a counter, a board behind a rail), stopping within this
+    /// many yalms across (and 2.5 up or down) is close enough to talk to it or use it from.
+    /// </param>
+    private List<Step> WalkSteps(string what, Func<Vector3?> where, float within = Reach, float talkFrom = TalkFrom)
     {
         var started = DateTime.MinValue;
         var tries = 0;
@@ -450,6 +454,9 @@ public sealed partial class RunEngine
         var sprintTried = DateTime.MinValue;
         var gotDown = false;
         var downAt = DateTime.MinValue;
+        var movedFrom = Vector3.Zero;
+        var movedAt = DateTime.MinValue;
+        DateTime? restartAt = null;
         void SayIt(string s) => Say(HelperNames.Ledger, s.Trim());
         return new List<Step>
         {
@@ -484,9 +491,12 @@ public sealed partial class RunEngine
                 to = where();
                 if (to == null) return StepOutcome.Halt($"Couldn't find {what} here. Near you: {InGame.NamesNear(40)}.");
                 if (InGame.DistanceTo(to.Value) <= within) return StepOutcome.Done;
-                if (!Nav.MoveTo(to.Value)) return StepOutcome.Halt($"vnavmesh wouldn't walk to {what}.");
+                // Up to within reach: the path ends there, in front of a counter rather than round it.
+                if (!Nav.MoveCloseTo(to.Value, within * 0.8f)) return StepOutcome.Halt($"vnavmesh wouldn't walk to {what}.");
                 walkTarget = to;
                 started = DateTime.UtcNow;
+                movedAt = started;
+                movedFrom = InGame.Me ?? Vector3.Zero;
                 tries = 1;
                 Doing = $"Walking to {what} · {HelperNames.Vnavmesh}";
                 return StepOutcome.Done;
@@ -509,15 +519,58 @@ public sealed partial class RunEngine
                         sprintTried = DateTime.UtcNow;
                         Movement.TrySprint(SayIt);
                     }
-                    if (Nav.Busy || DateTime.UtcNow - started < TimeSpan.FromSeconds(2)) return StepOutcome.Waiting;
+                    // Walking (a path found, not still being worked out) but not moved half a yalm in 12 s
+                    // (caught on a wall or a rail): stopped, and asked again a moment later, as stopping short is.
+                    // Moved, not closer: a detour round a building gets no closer for a while.
+                    var now = DateTime.UtcNow;
+                    if (restartAt is { } again)
+                    {
+                        // (And the zone's map ready again, should the stop have had vnavmesh reload it.)
+                        if (now < again || !Nav.Ready) return StepOutcome.Waiting;
+                        restartAt = null;
+                    }
+                    else
+                    {
+                        var me = InGame.Me;
+                        if (!Nav.Walking || me is not { } pos || Vector3.Distance(pos, movedFrom) > 0.5f)
+                        {
+                            movedFrom = me ?? movedFrom;
+                            movedAt = now;
+                        }
+                        if (Nav.Walking && now - movedAt > TimeSpan.FromSeconds(12))
+                        {
+                            SayIt($"Not moving towards {what} for 12 s ({d:0} yalms away): walking there again.");
+                            Nav.Stop();
+                            restartAt = now + TimeSpan.FromMilliseconds(300);
+                            return StepOutcome.Waiting;
+                        }
+                        if (Nav.Busy || now - started < TimeSpan.FromSeconds(2)) return StepOutcome.Waiting;
+                    }
+                    // Stopped short, but near enough to talk to it from (an NPC behind a counter, whose own spot the
+                    // floor doesn't reach: it was walked at twice, then the run stopped).
+                    if (InGame.Me is { } here && CloseEnough(here, to.Value, talkFrom))
+                    {
+                        SayIt($"vnavmesh can't get closer to {what} than {d:0.0} yalms (behind a counter?): close enough, from here.");
+                        Nav.Stop();
+                        walkTarget = null;
+                        return StepOutcome.Done;
+                    }
+                    // Stopped short: once more, to the nearest floor it can reach by it (the front of a counter),
+                    // then it's no way through.
                     if (tries >= 2)
                     {
                         walkTarget = null;
                         return StepOutcome.Halt($"vnavmesh couldn't find a way to {what} (it stopped {d:0} yalms away).");
                     }
                     tries++;
-                    started = DateTime.UtcNow;
-                    return Nav.MoveTo(to.Value) ? StepOutcome.Waiting : StepOutcome.Halt($"vnavmesh wouldn't walk to {what}.");
+                    started = now;
+                    movedAt = now;
+                    if (Nav.NearestReachable(to.Value, talkFrom, 2.5f) is { } front && CloseEnough(front, to.Value, talkFrom))
+                    {
+                        SayIt($"Stopped {d:0} yalms from {what}: walking to the nearest floor that reaches it, {Vector3.Distance(front, to.Value):0.0} yalms from it.");
+                        return Nav.MoveCloseTo(front, 0.5f) ? StepOutcome.Waiting : StepOutcome.Halt($"vnavmesh wouldn't walk to {what}.");
+                    }
+                    return Nav.MoveCloseTo(to.Value, within * 0.8f) ? StepOutcome.Waiting : StepOutcome.Halt($"vnavmesh wouldn't walk to {what}.");
                 },
                 Timeout = WalkWait,
                 TimeoutMessage = $"Didn't get to {what} within {WalkWait.TotalMinutes:0} minutes.",

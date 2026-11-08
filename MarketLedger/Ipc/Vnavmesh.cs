@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using MarketLedger.Core;
 using Dalamud.Plugin.Ipc;
@@ -14,7 +15,10 @@ namespace MarketLedger.Ipc;
 /// reloads the mesh, so it's only called while a path is being worked out),
 /// <c>SimpleMove.PathfindAndMoveTo</c> (Vector3, bool fly) → bool (line 53),
 /// <c>SimpleMove.PathfindInProgress</c> → bool (line 55), <c>Path.IsRunning</c> → bool (line 43),
-/// <c>Path.Stop</c> (line 42).
+/// <c>Path.Stop</c> (line 42). Checked again on master in November 2026 (lines unchanged), with
+/// <c>SimpleMove.PathfindAndMoveCloseTo</c> (Vector3, bool fly, float range) → bool (line 54) and
+/// <c>Query.Mesh.NearestPointReachable</c> (Vector3, float halfExtentXZ, float halfExtentY) → Vector3? (line 37),
+/// for an NPC behind a counter (as Housing Studio's plugin 1.0.4).
 /// </remarks>
 public sealed class Vnavmesh
 {
@@ -27,6 +31,9 @@ public sealed class Vnavmesh
     private readonly ICallGateSubscriber<bool> isRunning;
     private readonly ICallGateSubscriber<object> stop;
     private readonly ICallGateSubscriber<object> cancelPathfinds;
+    private readonly ICallGateSubscriber<Vector3, bool, float, bool> pathfindAndMoveCloseTo;
+    private readonly ICallGateSubscriber<Vector3, float, float, Vector3?> nearestReachable;
+    private bool closeToMissing;
 
     public Vnavmesh()
     {
@@ -37,9 +44,11 @@ public sealed class Vnavmesh
         isRunning = pi.GetIpcSubscriber<bool>("vnavmesh.Path.IsRunning");
         stop = pi.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
         cancelPathfinds = pi.GetIpcSubscriber<object>("vnavmesh.Nav.PathfindCancelAll");
+        pathfindAndMoveCloseTo = pi.GetIpcSubscriber<Vector3, bool, float, bool>("vnavmesh.SimpleMove.PathfindAndMoveCloseTo");
+        nearestReachable = pi.GetIpcSubscriber<Vector3, float, float, Vector3?>("vnavmesh.Query.Mesh.NearestPointReachable");
     }
 
-    public static string Calls => "Nav.IsReady · SimpleMove.PathfindAndMoveTo · SimpleMove.PathfindInProgress · Path.IsRunning · Path.Stop";
+    public static string Calls => "Nav.IsReady · SimpleMove.PathfindAndMoveTo · SimpleMove.PathfindAndMoveCloseTo · SimpleMove.PathfindInProgress · Query.Mesh.NearestPointReachable · Path.IsRunning · Path.Stop";
 
     public bool Installed => Plugins.Loaded(InternalName);
 
@@ -49,12 +58,52 @@ public sealed class Vnavmesh
     public bool Ready => guard.Call("Nav.IsReady", () => isReady.InvokeFunc(), false);
 
     /// <summary>Starts walking to a spot. False when it couldn't start.</summary>
-    public bool MoveTo(Vector3 to) => guard.Call("SimpleMove.PathfindAndMoveTo", () => pathfindAndMoveTo.InvokeFunc(to, false), false);
+    public bool MoveTo(Vector3 to)
+    {
+        // A walk still going is stopped first, so two never race.
+        if (Walking) Stop();
+        return guard.Call("SimpleMove.PathfindAndMoveTo", () => pathfindAndMoveTo.InvokeFunc(to, false), false);
+    }
 
-    private bool Pathfinding => guard.Call("SimpleMove.PathfindInProgress", () => pathfindInProgress.InvokeFunc(), false);
+    /// <summary>
+    /// Starts walking until within <paramref name="range"/> yalms of a spot: the path ends as soon as it's that
+    /// close, so a spot behind a counter is walked up to from the front. An older vnavmesh without it: walked
+    /// to the spot itself. False when it couldn't start.
+    /// </summary>
+    public bool MoveCloseTo(Vector3 to, float range)
+    {
+        if (Walking) Stop();
+        if (!closeToMissing)
+        {
+            try
+            {
+                return pathfindAndMoveCloseTo.InvokeFunc(to, false, range);
+            }
+            catch (Exception ex)
+            {
+                // Not in this vnavmesh (or it threw): its plain walk from now on.
+                closeToMissing = true;
+                Services.Log.Debug(ex, "vnavmesh didn't answer SimpleMove.PathfindAndMoveCloseTo: walking to the spot itself");
+            }
+        }
+        return MoveTo(to);
+    }
+
+    /// <summary>
+    /// The nearest point of the floor you can reach to a spot (within <paramref name="acrossXZ"/> yalms across
+    /// and <paramref name="acrossY"/> up or down), or null: for an NPC behind a counter, the floor in front of it.
+    /// </summary>
+    public Vector3? NearestReachable(Vector3 to, float acrossXZ, float acrossY) =>
+        guard.Call("Query.Mesh.NearestPointReachable", () => nearestReachable.InvokeFunc(to, acrossXZ, acrossY), null);
+
+    /// <summary>Working out a path (it starts walking once found).</summary>
+    public bool Pathfinding => guard.Call("SimpleMove.PathfindInProgress", () => pathfindInProgress.InvokeFunc(), false);
+
+    /// <summary>Walking a path found (not still working one out).</summary>
+    public bool Walking => guard.Call("Path.IsRunning", () => isRunning.InvokeFunc(), false);
 
     /// <summary>Finding a path or walking one.</summary>
-    public bool Busy => Pathfinding || guard.Call("Path.IsRunning", () => isRunning.InvokeFunc(), false);
+    public bool Busy => Pathfinding || Walking;
 
     /// <summary>Stops walking (safe to call whenever: nothing happens when it isn't).</summary>
     public void Stop()
