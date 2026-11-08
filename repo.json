@@ -25,12 +25,12 @@
     "LoadPriority": 0,
     "IconUrl": "https://raw.githubusercontent.com/koko-puffs/market-ledger-plugin/main/MarketLedger/images/icon.png",
     "AcceptsFeedback": true,
-    "AssemblyVersion": "0.1.1.0",
-    "TestingAssemblyVersion": "0.1.1.0",
-    "DownloadLinkInstall": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.1/MarketLedger.zip",
-    "DownloadLinkUpdate": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.1/MarketLedger.zip",
-    "DownloadLinkTesting": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.1/MarketLedger.zip",
-    "LastUpdate": 1793780612,
+    "AssemblyVersion": "0.1.2.0",
+    "TestingAssemblyVersion": "0.1.2.0",
+    "DownloadLinkInstall": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.2/MarketLedger.zip",
+    "DownloadLinkUpdate": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.2/MarketLedger.zip",
+    "DownloadLinkTesting": "https://github.com/koko-puffs/market-ledger-plugin/releases/download/v0.1.2/MarketLedger.zip",
+    "LastUpdate": 1794147526,
     "IsHide": false,
     "IsTestingExclusive": false
   }
