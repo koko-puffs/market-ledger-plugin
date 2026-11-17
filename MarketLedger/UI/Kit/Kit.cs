@@ -64,7 +64,7 @@ public enum Tone
 /// steppers, fields. Each takes the screen position to draw at (layout is the views'), hit-tests with
 /// an invisible ImGui button (so keyboard navigation works), and shows hover (edges lighten), press,
 /// focus (a 2px white ring, 2px out) and disabled (50% for buttons, 40% for small controls). Made
-/// from Housing Studio's plugin kit (by way of Raid Planner's), in Market Ledger's gold.
+/// from Decorium's plugin kit (by way of Raid Planner's), in Market Ledger's gold.
 /// </summary>
 public static partial class Kit
 {

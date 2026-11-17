@@ -5,7 +5,7 @@ namespace MarketLedger.Ipc;
 
 /// <summary>
 /// Lifestream (NightmareXIV/Lifestream), through its IPC: teleporting, a city's aethernet, a residential
-/// district's ward, visiting another world on your data centre (Housing Studio's plugin's wrapper).
+/// district's ward, visiting another world on your data centre (Decorium's plugin's wrapper).
 /// Every call is wrapped (<see cref="IpcGuard"/>). Framework thread.
 /// </summary>
 /// <remarks>

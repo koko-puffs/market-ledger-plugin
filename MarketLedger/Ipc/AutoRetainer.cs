@@ -19,7 +19,7 @@ namespace MarketLedger.Ipc;
 /// <c>AutoRetainer.GetOfflineCharacterData</c> (ulong) → its OfflineCharacterData (line 27; subscribed as
 /// object, which Dalamud's <c>CallGateChannel.ConvertObject</c> hands over as JSON (a Newtonsoft JObject):
 /// <c>RetainerData</c>, each <c>Name</c> and <c>RetainerID</c>, read by <see cref="Holdings.RetainerNamesFromJson"/>), and <c>AutoRetainer.PluginState.IsBusy</c> → bool
-/// (<c>AutoRetainer/Modules/EzIPCManagers/IPC_PluginState.cs</c>, line 15; Housing Studio's plugin asked
+/// (<c>AutoRetainer/Modules/EzIPCManagers/IPC_PluginState.cs</c>, line 15; Decorium's plugin asked
 /// "AutoRetainer.IsBusy", which isn't published).
 /// </remarks>
 public sealed class AutoRetainer

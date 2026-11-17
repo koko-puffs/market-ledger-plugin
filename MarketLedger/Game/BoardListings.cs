@@ -6,8 +6,8 @@ namespace MarketLedger.Game;
 
 /// <summary>
 /// The market board's listings for the item whose listings are open, as the game receives them
-/// (Dalamud's market board service: each batch of up to ten, in the order the list shows them). Housing
-/// Studio's plugin read them from the game's item search proxy first, which never said they'd come.
+/// (Dalamud's market board service: each batch of up to ten, in the order the list shows them).
+/// Decorium's plugin read them from the game's item search proxy first, which never said they'd come.
 /// Each listing's row is its place in that order.
 /// </summary>
 public static class BoardListings
@@ -88,7 +88,7 @@ public static class BoardListings
     {
         if (!MarketLedger.Automation.GameUi.IsOpen(MarketLedger.Automation.ErrandTable.ItemSearchResult)) return null;
         if (InGame.Listings(itemId) is { } l) return l;
-        // Nothing came at all: none listed after 10 s (a slow or busy board took 4 s in Housing Studio's runs).
+        // Nothing came at all: none listed after 10 s (a slow or busy board took 4 s in Decorium's runs).
         return (DateTime.UtcNow - AskedAt(itemId)).TotalSeconds > 10 ? new List<InGame.BoardListing>() : null;
     }
 

@@ -23,7 +23,7 @@ public readonly record struct MarketCity(uint AetheryteTerritory, string Name, u
 /// <summary>
 /// What a run reads and does in the game beyond windows: your bags and gil, stack sizes, worlds,
 /// aetherytes, the objects around you, talking to one, the retainers' bags, the board's listings, and
-/// whether it's safe to carry on (Housing Studio's plugin's ErrandGame). Framework thread only.
+/// whether it's safe to carry on (Decorium's plugin's ErrandGame). Framework thread only.
 /// </summary>
 public static unsafe class InGame
 {

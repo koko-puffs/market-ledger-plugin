@@ -14,7 +14,7 @@ namespace MarketLedger.Session;
 /// <summary>
 /// The steps the plugin does with its own clicks (taking from retainers, buying, entrusting): each is a
 /// list of parts (getting to a bell, opening a retainer, buying one line…), each part a list of small
-/// actions run by a <see cref="StepQueue"/>, as Housing Studio's plugin's errands are. Getting about:
+/// actions run by a <see cref="StepQueue"/>, as Decorium's plugin's errands are. Getting about:
 /// Lifestream's teleports, aethernet and world visits, vnavmesh's walking.
 /// </summary>
 public sealed partial class RunEngine

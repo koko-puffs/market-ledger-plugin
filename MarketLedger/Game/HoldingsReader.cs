@@ -15,7 +15,7 @@ namespace MarketLedger.Game;
 /// <summary>
 /// What the character you're playing holds, for the site (<c>ml_plugin_holdings</c>): your bags, the
 /// crystals and your currencies (<see cref="ReadCurrencies"/>), read whenever asked; the saddlebags and each retainer as last seen open (a retainer's bags
-/// whenever its inventory window is open, as Housing Studio's plugin counts them), kept per character in
+/// whenever its inventory window is open, as Decorium's plugin counts them), kept per character in
 /// holdings.json in the plugin's folder so they're still known after a restart; and Allagan Tools'
 /// counts of your retainers when it's installed (the plugin's own count of a retainer wins). Framework
 /// thread only (the file is written in the background).

@@ -11,7 +11,7 @@ namespace MarketLedger.Session;
 
 /// <summary>
 /// Carries a run out, step by step, on the framework thread (one <see cref="Tick"/> a frame), the way
-/// Housing Studio's plugin's errand runner does: one helper driving at a time (Artisan crafts,
+/// Decorium's plugin's errand runner does: one helper driving at a time (Artisan crafts,
 /// GatherBuddy Reborn gathers, and the plugin's own clicks take from retainers, buy and entrust, with
 /// Lifestream and vnavmesh to get about), every wait with a timeout, every action logged.
 ///
@@ -37,7 +37,7 @@ public sealed partial class RunEngine : IDisposable
 
     /// <summary>
     /// How near is near enough to talk to someone or use something when vnavmesh can't get closer (an NPC
-    /// behind a counter): yalms across, centre to centre (as Housing Studio's plugin 1.0.4).
+    /// behind a counter): yalms across, centre to centre (as Decorium's plugin 1.0.4).
     /// </summary>
     private const float TalkFrom = 4.5f;
 

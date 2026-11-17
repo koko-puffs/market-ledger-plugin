@@ -9,7 +9,7 @@ using MarketLedger.Game;
 namespace MarketLedger.Session;
 
 /// <summary>
-/// Buying (Housing Studio's plugin's errand buying): at gil shops, the line's price; on the market
+/// Buying (Decorium's plugin's errand buying): at gil shops, the line's price; on the market
 /// board, the cheapest listings at or under the line's <c>maxPrice</c> (<see cref="MarketRule"/>). Never
 /// past the gil agreed for the run (<c>maxGil</c>), your market ceiling or your gil, and never into the
 /// bag slots you keep free. Every purchase question the game asks is checked against what was chosen

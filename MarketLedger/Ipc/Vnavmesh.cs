@@ -6,8 +6,8 @@ using Dalamud.Plugin.Ipc;
 namespace MarketLedger.Ipc;
 
 /// <summary>
-/// vnavmesh (awgil/ffxiv_navmesh), through its IPC: walking to a spot in the zone you're in (Housing
-/// Studio's plugin's wrapper). Every call is wrapped (<see cref="IpcGuard"/>). Framework thread.
+/// vnavmesh (awgil/ffxiv_navmesh), through its IPC: walking to a spot in the zone you're in
+/// (Decorium's plugin's wrapper). Every call is wrapped (<see cref="IpcGuard"/>). Framework thread.
 /// </summary>
 /// <remarks>
 /// Verified in vnavmesh's source (<c>vnavmesh/IPCProvider.cs</c>, commit 6fc8072, 31 Aug 2026; each name
@@ -18,7 +18,7 @@ namespace MarketLedger.Ipc;
 /// <c>Path.Stop</c> (line 42). Checked again on master in November 2026 (lines unchanged), with
 /// <c>SimpleMove.PathfindAndMoveCloseTo</c> (Vector3, bool fly, float range) → bool (line 54) and
 /// <c>Query.Mesh.NearestPointReachable</c> (Vector3, float halfExtentXZ, float halfExtentY) → Vector3? (line 37),
-/// for an NPC behind a counter (as Housing Studio's plugin 1.0.4).
+/// for an NPC behind a counter (as Decorium's plugin 1.0.4).
 /// </remarks>
 public sealed class Vnavmesh
 {

@@ -17,7 +17,7 @@ public enum ChipKind
 }
 
 /// <summary>
-/// The wider layout's parts, from Glamour Studio's plugin kit: panes (a region that scrolls on its
+/// The wider layout's parts, from Glamourie's plugin kit: panes (a region that scrolls on its
 /// own), cards drawn at a rectangle, two columns side by side, chips in their colours and sizes,
 /// small mono labels, links and dots. Columns here are begun and ended rather than given lambdas,
 /// so a frame lays them without making closures.

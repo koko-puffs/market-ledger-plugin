@@ -9,7 +9,7 @@ using MarketLedger.Game;
 namespace MarketLedger.Session;
 
 /// <summary>
-/// Retainers, at a summoning bell (Housing Studio's plugin's errand code): taking a withdraw step's lines
+/// Retainers, at a summoning bell (Decorium's plugin's errand code): taking a withdraw step's lines
 /// from each, and giving an entrust step's to one. AutoRetainer has no IPC for either, so it's the game's
 /// own windows: the bell's list, the retainer's menu, their bags and each stack's item menu.
 /// </summary>

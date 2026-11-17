@@ -5,7 +5,7 @@ namespace MarketLedger.Automation;
 
 /// <summary>
 /// Every game window and click a run uses at a vendor, a summoning bell and the market board, in one
-/// place, with where each came from and how sure it is: Housing Studio's plugin's errand table, whose
+/// place, with where each came from and how sure it is: Decorium's plugin's errand table, whose
 /// values were recorded doing each by hand in the game (its Recording 2: a Material Supplier's and a
 /// housing merchant's purchase, a summoning bell, a retainer's item taken, a market board listing
 /// bought). The ones still marked unconfirmed (<see cref="UiCall.Verified"/> false, or a step keyed
@@ -16,7 +16,7 @@ namespace MarketLedger.Automation;
 /// <list type="bullet">
 /// <item>[ECommons] NightmareXIV/ECommons: SelectString and SelectIconString pick an entry with
 /// (index); SelectYesno's yes is (0).</item>
-/// <item>[Recording 2] Housing Studio's: seen sent by the game, by hand.</item>
+/// <item>[Recording 2] Decorium's: seen sent by the game, by hand.</item>
 /// <item>[Guess] Written from what other plugins are known to send, not checked against a recording.</item>
 /// </list>
 /// Words are matched in English only so far: in another client's language a menu entry or object isn't

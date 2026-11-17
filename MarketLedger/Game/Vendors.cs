@@ -20,7 +20,7 @@ public sealed record VendorOffer(uint ItemId, uint Price, uint NpcId, string Npc
     public string Where() => $"{NpcName}, {(PlaceName.Length > 0 ? PlaceName : "somewhere not known")}";
 }
 
-/// <summary>The residential districts' outdoor areas (Housing Studio's plugin's Residential).</summary>
+/// <summary>The residential districts' outdoor areas (Decorium's plugin's Residential).</summary>
 public static class Residential
 {
     /// <summary>The district's key for a ward's territory name ("s1h1" Mist … "r1h1" Empyreum), or null.</summary>
@@ -62,7 +62,7 @@ public static class Residential
 /// <summary>
 /// Which NPCs sell which items for gil, and where they stand: worked out once from the game's data,
 /// in the background, when the plugin loads (it goes through every NPC and every gil shop), then kept.
-/// Until it's ready every item has no offers. As Housing Studio's plugin's VendorData: an NPC's shops
+/// Until it's ready every item has no offers. As Decorium's plugin's VendorData: an NPC's shops
 /// are found from its ENpcBase's ENpcData (a GilShop itself, or one reached through a TopicSelect, a
 /// PreHandler or a CustomTalk's script arguments); its spot is its Level row, or for the residential
 /// districts' NPCs (which have none) the wards' own layout files.

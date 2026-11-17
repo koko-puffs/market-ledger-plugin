@@ -13,7 +13,7 @@ it's done. The plugin carries a run out, but it does the work itself only where 
 it asks the plugins you already use. **Artisan** crafts, **GatherBuddy Reborn** gathers,
 **Lifestream** travels and **vnavmesh** walks; the plugin's own clicks take things from your
 retainers at a summoning bell, buy from vendors and on the market board, and entrust what was made
-(Housing Studio's plugin's errand code, which recorded each of those clicks in the game). Only one
+(Decorium's plugin's errand code, which recorded each of those clicks in the game). Only one
 of them drives at a time. Every step's progress is read from your bags, so a step stopped halfway
 starts again from what your bags hold, and the site sees the same numbers.
 
@@ -30,7 +30,7 @@ levels, gil, free slots), what you hold, and what your retainers list and sell.
 - **Automation is against Square Enix's terms of service**, like every third-party tool, and this
   one acts in the game. Use it where you're happy to; don't talk about it in the game.
 - **Nothing of it has been tried in the game yet.** It compiles against Dalamud 15 and its Core is
-  unit-tested; the clicks come from Housing Studio's plugin, where they were recorded working, but
+  unit-tested; the clicks come from Decorium's plugin, where they were recorded working, but
   this plugin's runs are new. The clicks not yet seen working anywhere (opening a retainer's item
   menu, entrusting) hold the run until you press Resume, until you turn on **Trust the new clicks**.
 
@@ -66,7 +66,7 @@ HQ listings only, and one without `hq` takes either.
 
 ## The run (`Session/RunEngine*.cs`)
 
-Steps on the framework thread, one `Tick` a frame, as Housing Studio's errand runner does.
+Steps on the framework thread, one `Tick` a frame, as Decorium's errand runner does.
 
 - **Start** (from the window, the HUD, or the inbox) checks first that you're logged in and free, with
   the character the run was planned for (a run naming another of your characters' keys is refused: its
@@ -91,7 +91,7 @@ Steps on the framework thread, one `Tick` a frame, as Housing Studio's errand ru
   - *gather* and *craft* are handed to their plugin (below), and watched.
   - *withdraw*, *vendor*, *market* and *entrust* are lists of parts (getting to a bell, opening a
     retainer, buying one line…), each part small actions in a `StepQueue` (`Core/StepQueue.cs`, from
-    Housing Studio): every wait has a timeout, every click is logged, at least 0.3 s between clicks.
+    Decorium): every wait has a timeout, every click is logged, at least 0.3 s between clicks.
     When the parts are through and a line is still short, the run pauses and says what's short.
 - **Pause** (you, the site, `/ledger pause`, or anything unexpected) stops whatever the step started
   (walking, travel, auto-gather, Artisan's Endurance) and closes the windows it opened; **Resume**
@@ -184,7 +184,7 @@ take them by hand. Crystals go to the crystal bag, so they're counted there and 
 ### Vendors and the market (`RunEngine.Buying.cs`, `Game/Vendors.cs`)
 
 **Vendors**: the game's gil shops and who sells what are read once in the background when the plugin
-loads (`Vendors`, from Housing Studio's VendorData: GilShopItem, each NPC's ENpcData through
+loads (`Vendors`, from Decorium's VendorData: GilShopItem, each NPC's ENpcData through
 TopicSelect, PreHandler and CustomTalk, their Level spots, and the residential wards' layout files for
 the housing districts' vendors; items behind a quest or achievement left out). A vendor line goes to
 the NPC and zone the site named when one matches, else the cheapest NPC somewhere known outside the
@@ -221,7 +221,7 @@ The IPC names, verified in each plugin's source (clones of 3–4 Nov 2026):
 | … with list IPC | `.GetAutoGatherLists` → Dictionary&lt;string, bool&gt;, `.SetAutoGatherList` (string, Dictionary&lt;uint, uint&gt;, string?) → int, `.SetAutoGatherListEnabled` (string, bool) → bool, `.DeleteAutoGatherList` (string) → bool | the same file on HenryBaylis/GatherBuddyReborn `feature/autogather-list-ipc` (commit 240b220), and `AutoGather/Lists/AutoGatherListsManager.External.cs`. (Upstream's EzIPC publishes functions of at most one argument; the fork's, up to four, which these need.) |
 | vnavmesh (`vnavmesh`) | `vnavmesh.Nav.IsReady`, `.SimpleMove.PathfindAndMoveTo` (Vector3, bool) → bool, `.SimpleMove.PathfindAndMoveCloseTo` (Vector3, bool, float range) → bool (an older vnavmesh without it: walked to the spot), `.SimpleMove.PathfindInProgress`, `.Query.Mesh.NearestPointReachable` (Vector3, float, float) → Vector3?, `.Path.IsRunning`, `.Path.Stop`, `.Nav.PathfindCancelAll` (only while a path is being worked out: it reloads the mesh) | `vnavmesh/IPCProvider.cs`, lines 17, 25, 37, 42–43, 53–55 (commit 6fc8072; master, November 2026) |
 | Lifestream (`Lifestream`) | `Lifestream.Teleport` (uint, byte) → bool, `.AethernetTeleport` (string) → bool, `.ChangeWorld` (string) → bool, `.CanVisitSameDC` (string) → bool, `.GoToHousingAddress` (AddressBookEntryTuple), `.IsBusy` → bool, `.Abort`, `.ExecuteCommand` (string; the "/li" fallback, only when the call itself isn't there: an answer of false is a no) | `Lifestream/IPC/IPCProvider.cs`, lines 35, 59, 65, 71, 78, 102, 139, 241 (commit b363201); the tuple in `Lifestream/Data/AddressBookEntry.cs` |
-| AutoRetainer (`AutoRetainer`) | `AutoRetainer.GetSuppressed` → bool, `.SetSuppressed` (bool), `.GetOfflineCharacterData` (ulong) → its OfflineCharacterData (subscribed as object: Dalamud hands it over as JSON; `RetainerData`, `Name`, `RetainerID`, fields of AutoRetainerAPI's `Configuration/OfflineCharacterData.cs` and `OfflineRetainerData.cs`), `AutoRetainer.PluginState.IsBusy` → bool | `AutoRetainer/Modules/IPC.cs` lines 22–23, 27; `Modules/EzIPCManagers/IPC_PluginState.cs` line 15 (commit cc020df). It has no IPC to entrust or withdraw. Housing Studio's plugin asks "AutoRetainer.IsBusy", which isn't published. |
+| AutoRetainer (`AutoRetainer`) | `AutoRetainer.GetSuppressed` → bool, `.SetSuppressed` (bool), `.GetOfflineCharacterData` (ulong) → its OfflineCharacterData (subscribed as object: Dalamud hands it over as JSON; `RetainerData`, `Name`, `RetainerID`, fields of AutoRetainerAPI's `Configuration/OfflineCharacterData.cs` and `OfflineRetainerData.cs`), `AutoRetainer.PluginState.IsBusy` → bool | `AutoRetainer/Modules/IPC.cs` lines 22–23, 27; `Modules/EzIPCManagers/IPC_PluginState.cs` line 15 (commit cc020df). It has no IPC to entrust or withdraw. Decorium's plugin asks "AutoRetainer.IsBusy", which isn't published. |
 | Allagan Tools (`InventoryTools`) | `AllaganTools.IsInitialized` → bool, `.GetCharactersOwnedByActive` (bool) → HashSet&lt;ulong&gt;, `.GetCharacterItems` (ulong) → HashSet&lt;ulong[]&gt; (each CriticalCommonLib's `InventoryItem.ToNumeric()`: container, slot, item, quantity…) | `InventoryTools/IPC/IPCService.cs`, lines 571–593 (commit 70a9f41); `ToNumeric` in CriticalCommonLib `Models/InventoryItem.cs` line 832 |
 
 ## The site (`Core/SiteRpc.cs`, `Core/SiteLink.cs`, `Session/SiteSync.cs`)
@@ -321,8 +321,8 @@ it's held for you, text to copy), `Helpers`, `Character`, `Notice`, and `Start`,
 each frame on the framework thread (where `Tick` runs too); what you press is queued and run after the
 frame's drawing.
 
-Both are drawn with the house kit of Koko's plugins (`UI/Kit`, from Raid Planner's plugin with Glamour
-Studio's layout parts) in Market Ledger's gold. The kit stays in the namespace `MarketLedger.UI`: a
+Both are drawn with the house kit of Koko's plugins (`UI/Kit`, from Raid Planner's plugin with
+Glamourie's layout parts) in Market Ledger's gold. The kit stays in the namespace `MarketLedger.UI`: a
 namespace `MarketLedger.UI.Kit` would make every `Kit.Button(...)` resolve to it and fail to compile.
 
 **The main window** (`MainWindow`; `/ledger`, Dalamud's open button opens Home, its cog Settings):
@@ -428,8 +428,8 @@ release, which makes its entry.
 Vendors behind a counter: vnavmesh walks up to them from the front (its path ends within reach), and one
 it can't get right up to is talked to from within 4.5 yalms, after a walk to the nearest floor that
 reaches them; the run used to walk at them twice and stop. A summoning bell or a market board behind a
-rail likewise. A walk that hasn't moved for 12 s is stopped and asked again. The same walk as Housing
-Studio's plugin 1.0.4.
+rail likewise. A walk that hasn't moved for 12 s is stopped and asked again. The same walk as
+Decorium's plugin 1.0.4.
 
 ### 0.1.0
 

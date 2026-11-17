@@ -9,7 +9,7 @@ namespace MarketLedger.Core;
 /// <c>maxPrice</c> for one, whose whole cost (tax included) fits what's left of the line's gil, of the
 /// gil agreed for the run (<c>maxGil</c>), of your market ceiling and of your gil; at a vendor, the
 /// line's price, within the same. Every purchase question the game asks is checked against the price
-/// chosen before it's answered yes. Pure, so it's tested. (From Housing Studio's plugin's MarketRule,
+/// chosen before it's answered yes. Pure, so it's tested. (From Decorium's plugin's MarketRule,
 /// without its leeway: the site's <c>maxPrice</c> already has room in it, the planned price and 15%.)
 /// </summary>
 public static class MarketRule
